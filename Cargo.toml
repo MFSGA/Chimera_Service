@@ -9,7 +9,7 @@ authors = ["zzzgydi", "LibNyanpasu"]
 repository = "https://github.com/MFSGA/Chimera_Service"
 
 [workspace.dependencies]
-
+tokio = { version = "1", features = ["full"] }
 
 [profile.release]
 panic = "unwind"

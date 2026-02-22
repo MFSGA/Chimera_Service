@@ -1,0 +1,1 @@
+cargo watch -x "run --package chimera-service --bin chimera-service"
