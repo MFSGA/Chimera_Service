@@ -68,17 +68,17 @@ jobs:
       - name: Archive
         run: |
           mkdir -p target/release
-          cp target/${{ matrix.profile.target }}/release/nyanpasu-service target/release/nyanpasu-service
-          tar -czf nyanpasu-service-${{ matrix.profile.target }}.tar.gz target/release/nyanpasu-service
+          cp target/${{ matrix.profile.target }}/release/chimera-service target/release/chimera-service
+          tar -czf chimera-service-${{ matrix.profile.target }}.tar.gz target/release/chimera-service
       - name: Calc the archive signature
-        run: sha256sum nyanpasu-service-${{ matrix.profile.target }}.tar.gz > nyanpasu-service-${{ matrix.profile.target }}.tar.gz.sha256
+        run: sha256sum chimera-service-${{ matrix.profile.target }}.tar.gz > chimera-service-${{ matrix.profile.target }}.tar.gz.sha256
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: nyanpasu-service-${{ matrix.profile.target }}
+          name: chimera-service-${{ matrix.profile.target }}
           path: |
-            nyanpasu-service-${{ matrix.profile.target }}.tar.gz
-            nyanpasu-service-${{ matrix.profile.target }}.tar.gz.sha256
+            chimera-service-${{ matrix.profile.target }}.tar.gz
+            chimera-service-${{ matrix.profile.target }}.tar.gz.sha256
 
   release_windows:
     name: Build ${{ matrix.profile.target }}
@@ -104,17 +104,17 @@ jobs:
       - name: Archive
         run: |
           New-Item -ItemType Directory -Force -Path target\release
-          Copy-Item target\${{ matrix.profile.target }}\release\nyanpasu-service.exe target\release\nyanpasu-service.exe
+          Copy-Item target\${{ matrix.profile.target }}\release\chimera-service.exe target\release\chimera-service.exe
           Set-Location target\release
-          Compress-Archive -Path nyanpasu-service.exe -DestinationPath ..\..\nyanpasu-service-${{ matrix.profile.target }}.zip
+          Compress-Archive -Path chimera-service.exe -DestinationPath ..\..\chimera-service-${{ matrix.profile.target }}.zip
           Set-Location ..\..
       - name: Calc the archive signature
         shell: pwsh
-        run: Get-FileHash nyanpasu-service-${{ matrix.profile.target }}.zip -Algorithm SHA256 | Format-List > nyanpasu-service-${{ matrix.profile.target }}.zip.sha256
+        run: Get-FileHash chimera-service-${{ matrix.profile.target }}.zip -Algorithm SHA256 | Format-List > chimera-service-${{ matrix.profile.target }}.zip.sha256
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: nyanpasu-service-${{ matrix.profile.target }}
+          name: chimera-service-${{ matrix.profile.target }}
           path: |
-            nyanpasu-service-${{ matrix.profile.target }}.zip
-            nyanpasu-service-${{ matrix.profile.target }}.zip.sha256
+            chimera-service-${{ matrix.profile.target }}.zip
+            chimera-service-${{ matrix.profile.target }}.zip.sha256
