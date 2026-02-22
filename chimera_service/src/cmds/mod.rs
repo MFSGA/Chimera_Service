@@ -1,0 +1,65 @@
+use clap::{Parser, Subcommand};
+
+mod rpc;
+mod status;
+
+/// Nyanpasu Service, a privileged service for managing the core service.
+///
+/// The main entry point for the service, Other commands are the control plane for the service.
+///
+/// rpc subcommands are shortcuts for client rpc calls,
+/// It is useful for testing and debugging service rpc calls.
+#[derive(Parser)]
+#[command(version, author, about, long_about, disable_version_flag = true)]
+struct Cli {
+    /// Enable verbose logging
+    #[clap(short = 'V', long, default_value = "false")]
+    verbose: bool,
+
+    /// Print the version
+    #[clap(short, long, default_value = "false")]
+    version: bool,
+
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Uninstall the service
+    Uninstall,
+    /// Get the status of the service
+    Status(status::StatusCommand),
+    /// RPC commands, a shortcut for client rpc calls
+    #[command(subcommand)]
+    Rpc(rpc::RpcCommand),
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum CommandError {
+    #[error("permission denied")]
+    PermissionDenied,
+
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+
+pub async fn process() -> Result<(), CommandError> {
+    let cli = Cli::parse();
+    if cli.version {
+        print_version();
+    }
+
+    if !matches!(
+        cli.command,
+        Some(Commands::Status(_)) | Some(Commands::Rpc(_)) | None
+    ) && !crate::utils::must_check_elevation()
+    {
+        return Err(CommandError::PermissionDenied);
+    }
+    todo!()
+}
+
+pub fn print_version() {
+    todo!()
+}

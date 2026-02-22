@@ -11,6 +11,15 @@ repository = "https://github.com/MFSGA/Chimera_Service"
 [workspace.dependencies]
 tokio = { version = "1", features = ["full"] }
 
+nyanpasu-utils = { git = "https://github.com/LibNyanpasu/nyanpasu-utils.git", default-features = false }
+
+chimera_utils = { git = "https://github.com/MFSGA/Chimera_Utils.git", default-features = false }
+
+thiserror = "2"
+anyhow = "1"
+
+clap = { version = "4", features = ["derive"] }
+
 [profile.release]
 panic = "unwind"
 codegen-units = 1

@@ -9,6 +9,31 @@ repository = { workspace = true }
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[features]
+deadlock_detection = [
+    # "parking_lot/deadlock_detection",
+    # "nyanpasu-utils/deadlock_detection",
+]
+
 [dependencies]
 tokio = { workspace = true, features = ["full"] }
 ctrlc = { version = "3", features = ["termination"] }
+
+tracing-panic = "0.1"
+
+nyanpasu-utils = { workspace = true, default-features = false, features = [
+    "dirs",
+    "os",
+    "network",
+] }
+
+# todo: add the features
+chimera_utils = { workspace = true, default-features = false }
+
+thiserror.workspace = true
+anyhow = { workspace = true }
+
+clap = { version = "4", features = ["derive"] }
+
+[target.'cfg(windows)'.dependencies]
+check_elevation = "0.2.4"
