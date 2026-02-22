@@ -1,0 +1,38 @@
+
+## [1.5.0] - 2026-02-22 19:22:53
+
+
+### ✨ Features
+
+- Add workflows support by @MFSGA 
+
+- Add block_on -> handler -> process support copleted and support logger by @MFSGA 
+
+- Add block_on -> handler -> process support by @MFSGA 
+
+- Add register_ctrlc_handler by @MFSGA 
+
+- Prepare the projetc by @MFSGA 
+
+- Add ref by @MFSGA 
+
+
+### 🐛 Bug Fixes
+
+- For publish workflow by @MFSGA 
+
+- For publish scripts by @MFSGA 
+
+- For publish by @MFSGA 
+
+- For workflow by @MFSGA 
+
+-----------------
+
+
+
+## New Contributors
+* @MFSGA made their first contribution
+
+
+
