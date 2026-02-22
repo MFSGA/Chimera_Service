@@ -1,2 +1,4 @@
 # Chimera_Service
-used for Chimera Gui
+used as a service for Chimera Gui based on https://github.com/libnyanpasu/nyanpasu-service
+
+# ref project

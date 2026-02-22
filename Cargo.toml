@@ -1,0 +1,18 @@
+[workspace]
+resolver = "2"
+members = ["chimera_service", "chimera_ipc"]
+
+[workspace.package]
+edition = "2024"
+license = "GPL-3.0"
+authors = ["zzzgydi", "LibNyanpasu"]
+repository = "https://github.com/MFSGA/Chimera_Service"
+
+[workspace.dependencies]
+
+
+[profile.release]
+panic = "unwind"
+codegen-units = 1
+lto = true
+opt-level = "s"
