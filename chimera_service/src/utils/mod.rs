@@ -2,6 +2,8 @@ use tracing_panic::panic_hook;
 
 pub mod os;
 
+pub mod dirs;
+
 /// Register a panic hook to log the panic message and location, then exit the process.
 pub fn register_panic_hook() {
     std::panic::set_hook(Box::new(panic_hook));

@@ -10,6 +10,7 @@ repository = { workspace = true }
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
+tracing = ["tokio/tracing"] # "dep:console-subscriber"]
 deadlock_detection = [
     # "parking_lot/deadlock_detection",
     # "nyanpasu-utils/deadlock_detection",
@@ -34,6 +35,22 @@ thiserror.workspace = true
 anyhow = { workspace = true }
 
 clap = { version = "4", features = ["derive"] }
+
+tracing.workspace = true
+tracing-appender.workspace = true
+tracing-log.workspace = true
+tracing-subscriber = { workspace = true, features = [
+    "env-filter",
+    "json",
+    "parking_lot",
+] }
+
+supports-color = "3.0.2"
+bounded-vec-deque = "0.1.1"
+parking_lot = "0.12"
+indexmap = { version = "2", features = ["serde"] }
+serde_json = "1"
+serde = { workspace = true, features = ["derive"] }
 
 [target.'cfg(windows)'.dependencies]
 check_elevation = "0.2.4"

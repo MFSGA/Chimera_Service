@@ -1,7 +1,10 @@
+use crate::logging;
 use clap::{Parser, Subcommand};
 
 mod rpc;
 mod status;
+
+mod server;
 
 /// Nyanpasu Service, a privileged service for managing the core service.
 ///
@@ -28,6 +31,8 @@ struct Cli {
 enum Commands {
     /// Uninstall the service
     Uninstall,
+    /// Run the server. It should be called by the service manager.
+    Server(server::ServerContext), // The main entry point for the service, other commands are the control plane for the service
     /// Get the status of the service
     Status(status::StatusCommand),
     /// RPC commands, a shortcut for client rpc calls
@@ -57,7 +62,22 @@ pub async fn process() -> Result<(), CommandError> {
     {
         return Err(CommandError::PermissionDenied);
     }
-    todo!()
+
+    if matches!(cli.command, Some(Commands::Server(_))) {
+        logging::init(cli.verbose, true)?;
+    } else {
+        logging::init(cli.verbose, false)?;
+    }
+
+    match cli.command {
+        Some(_) => {
+            todo!()
+        }
+        None => {
+            eprintln!("No command specified");
+            Ok(())
+        }
+    }
 }
 
 pub fn print_version() {

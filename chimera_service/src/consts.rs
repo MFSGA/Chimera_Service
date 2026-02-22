@@ -1,3 +1,5 @@
+pub const APP_NAME: &str = env!("CARGO_PKG_NAME");
+
 pub enum ExitCode {
     Normal = 0,
     PermissionDenied = 64,

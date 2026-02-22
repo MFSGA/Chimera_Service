@@ -20,6 +20,16 @@ anyhow = "1"
 
 clap = { version = "4", features = ["derive"] }
 
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = [
+    "env-filter",
+    "json",
+    "parking_lot",
+] }
+tracing-log = { version = "0.2" }
+tracing-appender = { version = "0.2", features = ["parking_lot"] }
+serde = { version = "1", features = ["derive"] }
+
 [profile.release]
 panic = "unwind"
 codegen-units = 1
