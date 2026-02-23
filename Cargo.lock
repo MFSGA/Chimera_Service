@@ -239,11 +239,11 @@ dependencies = [
 
 [[package]]
 name = "chimera-ipc"
-version = "1.6.0"
+version = "1.6.1"
 
 [[package]]
 name = "chimera-service"
-version = "1.5.0"
+version = "1.5.1"
 dependencies = [
  "anyhow",
  "bounded-vec-deque",
