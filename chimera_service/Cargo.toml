@@ -10,7 +10,7 @@ repository = { workspace = true }
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-tracing = ["tokio/tracing"] # "dep:console-subscriber"]
+tracing = ["tokio/tracing", "dep:console-subscriber"]
 deadlock_detection = [
     # "parking_lot/deadlock_detection",
     # "nyanpasu-utils/deadlock_detection",
@@ -53,6 +53,10 @@ serde_json = "1"
 serde = { workspace = true, features = ["derive"] }
 
 constcat = "0.6.0"
+
+console-subscriber = { version = "0.5", optional = true, features = [
+    "parking_lot",
+] }
 
 [target.'cfg(windows)'.dependencies]
 check_elevation = "0.2.4"
