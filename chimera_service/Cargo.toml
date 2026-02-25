@@ -30,6 +30,7 @@ nyanpasu-utils = { workspace = true, default-features = false, features = [
 
 # todo: add the features
 chimera_utils = { workspace = true, default-features = false }
+chimera-ipc = { path = "../chimera_ipc", features = ["client"] }
 
 thiserror.workspace = true
 anyhow = { workspace = true }
@@ -51,6 +52,7 @@ parking_lot = "0.12"
 indexmap = { version = "2", features = ["serde"] }
 serde_json = "1"
 serde = { workspace = true, features = ["derive"] }
+service-manager = "0.8"
 
 constcat = "0.6.0"
 

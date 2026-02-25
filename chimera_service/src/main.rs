@@ -38,7 +38,7 @@ pub async fn handler() -> ExitCode {
 
 fn main() -> ExitCode {
     let mut rx = register_ctrlc_handler();
-    register_panic_hook();
+    // register_panic_hook();
     #[cfg(windows)]
     {
         let args = std::env::args_os().any(|arg| &arg == "--service");
@@ -47,7 +47,6 @@ fn main() -> ExitCode {
             return ExitCode::Normal;
         }
     }
-    // todo
 
     block_on(async {
         tokio::select! {

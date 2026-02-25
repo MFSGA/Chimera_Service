@@ -70,6 +70,7 @@ pub async fn process() -> Result<(), CommandError> {
     }
 
     match cli.command {
+        Some(Commands::Status(ctx)) => Ok(status::status(ctx).await?),
         Some(_) => {
             todo!()
         }

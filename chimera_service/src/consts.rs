@@ -1,6 +1,7 @@
 use constcat::concat;
 
 pub const APP_NAME: &str = env!("CARGO_PKG_NAME");
+pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const SERVICE_LABEL: &str = concat!("moe.elaina.", APP_NAME);
 
 pub enum ExitCode {

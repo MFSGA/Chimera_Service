@@ -1,3 +1,5 @@
+use anyhow::Context;
+use service_manager::ServiceManager;
 use tracing_panic::panic_hook;
 
 pub mod os;
@@ -26,4 +28,14 @@ pub fn must_check_elevation() -> bool {
     {
         todo!()
     }
+}
+
+pub fn get_service_manager() -> Result<Box<dyn ServiceManager>, anyhow::Error> {
+    let manager = <dyn ServiceManager>::native()?;
+    if !manager.available().context(
+        "service manager is not available, please make sure you are running as root or administrator",
+    )? {
+        anyhow::bail!("service manager not available");
+    }
+    Ok(manager)
 }
