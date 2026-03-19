@@ -28,6 +28,10 @@ pub async fn handler() -> ExitCode {
             eprintln!("Permission denied, please run as administrator or root");
             ExitCode::PermissionDenied
         }
+        Err(cmds::CommandError::ServiceNotInstalled) => {
+            eprintln!("Service not installed");
+            ExitCode::ServiceNotInstalled
+        }
         Err(cmds::CommandError::ServiceAlreadyInstalled) => {
             eprintln!("Service already installed");
             ExitCode::ServiceAlreadyInstalled

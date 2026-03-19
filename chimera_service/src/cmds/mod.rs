@@ -4,6 +4,7 @@ use clap::{Parser, Subcommand};
 mod install;
 mod rpc;
 mod status;
+mod uninstall;
 
 mod server;
 
@@ -48,6 +49,9 @@ pub enum CommandError {
     #[error("permission denied")]
     PermissionDenied,
 
+    #[error("service not installed")]
+    ServiceNotInstalled,
+
     #[error("service already installed")]
     ServiceAlreadyInstalled,
 
@@ -84,6 +88,12 @@ pub async fn process() -> Result<(), CommandError> {
     match cli.command {
         Some(Commands::Install(ctx)) => {
             let result = tokio::task::spawn_blocking(move || install::install(ctx))
+                .await
+                .map_err(anyhow::Error::from)?;
+            Ok(result?)
+        }
+        Some(Commands::Uninstall) => {
+            let result = tokio::task::spawn_blocking(uninstall::uninstall)
                 .await
                 .map_err(anyhow::Error::from)?;
             Ok(result?)
