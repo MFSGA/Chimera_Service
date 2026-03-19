@@ -71,9 +71,8 @@ pub fn install(ctx: InstallCommand) -> Result<(), CommandError> {
         tracing::info!("ensuring acl file exists...");
         rt.block_on(crate::utils::acl::create_acl_file())?;
 
-        let mut entries = std::collections::BTreeSet::from_iter(
-            rt.block_on(crate::utils::acl::read_acl_file())?,
-        );
+        let mut entries =
+            std::collections::BTreeSet::from_iter(rt.block_on(crate::utils::acl::read_acl_file())?);
         entries.insert(ctx.user.clone());
 
         let entries = entries.into_iter().collect::<Vec<_>>();

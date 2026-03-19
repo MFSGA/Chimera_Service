@@ -56,10 +56,7 @@ pub enum CommandError {
     ServiceAlreadyInstalled,
 
     #[error("io error: {0}")]
-    Io(
-        #[from]
-        std::io::Error,
-    ),
+    Io(#[from] std::io::Error),
 
     #[error(transparent)]
     Other(#[from] anyhow::Error),

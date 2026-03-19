@@ -43,8 +43,19 @@ pub async fn read_acl_file() -> Result<Vec<String>, anyhow::Error> {
 
 pub async fn write_acl_file<T: AsRef<str>>(entries: &[T]) -> Result<(), anyhow::Error> {
     let path = acl_path();
-    let mut file = OpenOptions::new().write(true).truncate(true).open(path).await?;
-    file.write_all(entries.iter().map(|x| x.as_ref()).collect::<Vec<_>>().join("\n").as_bytes())
+    let mut file = OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(path)
         .await?;
+    file.write_all(
+        entries
+            .iter()
+            .map(|x| x.as_ref())
+            .collect::<Vec<_>>()
+            .join("\n")
+            .as_bytes(),
+    )
+    .await?;
     Ok(())
 }
