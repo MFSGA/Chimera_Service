@@ -1,6 +1,7 @@
 use crate::logging;
 use clap::{Parser, Subcommand};
 
+mod install;
 mod rpc;
 mod status;
 
@@ -29,6 +30,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Install the service
+    Install(install::InstallCommand),
     /// Uninstall the service
     Uninstall,
     /// Run the server. It should be called by the service manager.
@@ -44,6 +47,15 @@ enum Commands {
 pub enum CommandError {
     #[error("permission denied")]
     PermissionDenied,
+
+    #[error("service already installed")]
+    ServiceAlreadyInstalled,
+
+    #[error("io error: {0}")]
+    Io(
+        #[from]
+        std::io::Error,
+    ),
 
     #[error(transparent)]
     Other(#[from] anyhow::Error),
@@ -70,6 +82,12 @@ pub async fn process() -> Result<(), CommandError> {
     }
 
     match cli.command {
+        Some(Commands::Install(ctx)) => {
+            let result = tokio::task::spawn_blocking(move || install::install(ctx))
+                .await
+                .map_err(anyhow::Error::from)?;
+            Ok(result?)
+        }
         Some(Commands::Status(ctx)) => Ok(status::status(ctx).await?),
         Some(_) => {
             todo!()
