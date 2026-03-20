@@ -1,6 +1,6 @@
 // pub mod core;
 pub mod log;
-// pub mod network;
+pub mod network;
 pub mod status;
 pub mod ws;
 

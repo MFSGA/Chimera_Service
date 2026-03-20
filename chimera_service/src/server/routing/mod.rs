@@ -6,7 +6,7 @@ use super::CoreManager;
 
 // pub mod core;
 pub mod logs;
-// pub mod network;
+pub mod network;
 pub mod status;
 pub mod ws;
 
@@ -24,8 +24,8 @@ pub fn create_router(state: AppState) -> Router {
         .merge(status::setup())
         // .merge(core::setup())
         .merge(logs::setup())
-        // .merge(network::setup())
-        // .merge(ws::setup())
+        .merge(network::setup())
+        .merge(ws::setup())
         .with_state(state)
         .layer(tracing_layer)
 }
