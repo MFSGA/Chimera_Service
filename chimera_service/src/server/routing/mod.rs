@@ -4,7 +4,7 @@ use ws::WsState;
 
 use super::CoreManager;
 
-// pub mod core;
+pub mod core;
 pub mod logs;
 pub mod network;
 pub mod status;
@@ -22,7 +22,7 @@ pub fn create_router(state: AppState) -> Router {
     let tracing_layer = tower_http::trace::TraceLayer::new_for_http();
     Router::new()
         .merge(status::setup())
-        // .merge(core::setup())
+        .merge(core::setup())
         .merge(logs::setup())
         .merge(network::setup())
         .merge(ws::setup())
