@@ -44,6 +44,8 @@ pub fn init(debug: bool, write_file: bool) -> anyhow::Result<()> {
             7,
         )
     };
+    #[cfg(feature = "dev")]
+    println!("dev feature set log_level is {}", log_level);
     let filter = EnvFilter::builder()
         .with_default_directive(log_level.into())
         .from_env_lossy();

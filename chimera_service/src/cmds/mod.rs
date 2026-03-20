@@ -57,6 +57,8 @@ pub enum CommandError {
 
     #[error("service already installed")]
     ServiceAlreadyInstalled,
+    #[error("service not running")]
+    ServiceAlreadyStopped,
     #[error("service already running")]
     ServiceAlreadyRunning,
     #[error("join error: {0}")]
@@ -82,13 +84,15 @@ pub async fn process() -> Result<(), CommandError> {
         return Err(CommandError::PermissionDenied);
     }
 
-    /* todo: log
-    if matches!(cli.command, Some(Commands::Server(_))) {
-        logging::init(cli.verbose, true)?;
-    } else {
-        // todo: used for debug. delete it in the future.
-        logging::init(cli.verbose, true)?;
-    } */
+    #[cfg(not(feature = "dev"))]
+    {
+        if matches!(cli.command, Some(Commands::Server(_))) {
+            logging::init(cli.verbose, true)?;
+        } else {
+            // todo: used for debug. delete it in the future.
+            logging::init(cli.verbose, false)?;
+        }
+    }
 
     match cli.command {
         Some(Commands::Install(ctx)) => {

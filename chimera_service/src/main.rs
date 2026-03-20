@@ -36,7 +36,14 @@ pub async fn handler() -> ExitCode {
             eprintln!("Service already installed");
             ExitCode::ServiceAlreadyInstalled
         }
-
+        Err(cmds::CommandError::ServiceAlreadyStopped) => {
+            eprintln!("Service already stopped");
+            ExitCode::ServiceAlreadyStopped
+        }
+        Err(cmds::CommandError::ServiceAlreadyRunning) => {
+            eprintln!("Service already running");
+            ExitCode::ServiceAlreadyRunning
+        }
         Err(e) => {
             error!("Error: {:#?}", e);
             ExitCode::Other
@@ -45,8 +52,8 @@ pub async fn handler() -> ExitCode {
 }
 
 fn main() -> ExitCode {
-    // todo: log
-    // logging::init(true, false).unwrap();
+    #[cfg(feature = "dev")]
+    logging::init(true, false).unwrap();
     let mut rx = register_ctrlc_handler();
     register_panic_hook();
     #[cfg(windows)]

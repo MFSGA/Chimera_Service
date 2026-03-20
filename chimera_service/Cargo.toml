@@ -16,6 +16,8 @@ deadlock_detection = [
     # "nyanpasu-utils/deadlock_detection",
 ]
 
+dev=[]
+
 [dependencies]
 tokio = { workspace = true, features = ["full"] }
 ctrlc = { version = "3", features = ["termination"] }
