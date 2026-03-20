@@ -3,14 +3,14 @@ mod instance;
 mod logger;
 mod routing;
 
-use chimera_ipc::{
-    SERVICE_PLACEHOLDER,
-    // api::ws::events::{Event as WsEvent, TraceLog},
-    // server::create_server,
-};
 pub use instance::CoreManagerService as CoreManager;
 pub use logger::Logger;
-use routing::AppState;
+use chimera_ipc::{
+    SERVICE_PLACEHOLDER,
+    api::ws::events::{Event as WsEvent, TraceLog},
+    server::create_server,
+};
+use routing::{AppState, create_router};
 use tokio_util::sync::CancellationToken;
 use tracing_attributes::instrument;
 
@@ -29,8 +29,6 @@ pub async fn run(
         ws_state: WsState::default(),
     };
     let ws_state = state.ws_state.clone();
-    todo!()
-    /*
     tokio::spawn(async move {
         while let Some(state) = rx.recv().await {
             tracing::info!("State changed: {:?}", state);
@@ -75,5 +73,5 @@ pub async fn run(
         sids,
     )
     .await?;
-    Ok(()) */
+    Ok(())
 }

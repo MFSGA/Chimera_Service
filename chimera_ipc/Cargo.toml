@@ -5,6 +5,7 @@ edition = "2024"
 
 [features]
 client = []
+server = ["dep:axum", "dep:axum-extra", "dep:tower", "dep:widestring"]
 
 [dependencies]
 nyanpasu-utils = { workspace = true, default-features = false, features = [
@@ -27,3 +28,15 @@ tokio-util = { version = "0.7", features = ["io-util"] }
 bytes = "1"
 serde_json = "1"
 
+indexmap = { version = "2", features = ["serde"] }
+
+axum = { version = "0.8", features = ["ws"], optional = true }
+axum-extra = { version = "0.12", features = ["typed-header"], optional = true }
+tower = { version = "0.5", features = ["util"], optional = true }
+# tower-http = { version = "0.5", features = ["fs", "trace"], optional = true }
+widestring = { version = "1", optional = true }
+
+tracing-attributes = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true }

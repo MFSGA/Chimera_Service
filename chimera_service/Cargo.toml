@@ -16,7 +16,7 @@ deadlock_detection = [
     # "nyanpasu-utils/deadlock_detection",
 ]
 
-dev=[]
+dev = []
 
 [dependencies]
 tokio = { workspace = true, features = ["full"] }
@@ -32,7 +32,10 @@ nyanpasu-utils = { workspace = true, default-features = false, features = [
 
 # todo: add the features
 chimera_utils = { workspace = true, default-features = false }
-chimera-ipc = { path = "../chimera_ipc", features = ["client"] }
+chimera-ipc = { path = "../chimera_ipc", default-features = false, features = [
+    "server",
+    "client",
+] }
 
 thiserror.workspace = true
 anyhow = { workspace = true }
@@ -65,6 +68,11 @@ console-subscriber = { version = "0.5", optional = true, features = [
 
 tokio-util = { workspace = true }
 dunce = "1.0.5"
+
+futures-util = { workspace = true }
+dashmap = "6"
+axum = { workspace = true, features = ["macros"] }
+tower-http = { version = "0.6", features = ["trace"] }
 
 [target.'cfg(windows)'.dependencies]
 check_elevation = "0.2.4"
