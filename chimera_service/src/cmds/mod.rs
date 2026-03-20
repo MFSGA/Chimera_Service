@@ -79,7 +79,8 @@ pub async fn process() -> Result<(), CommandError> {
     if matches!(cli.command, Some(Commands::Server(_))) {
         logging::init(cli.verbose, true)?;
     } else {
-        logging::init(cli.verbose, false)?;
+        // todo: used for debug. delete it in the future.
+        logging::init(cli.verbose, true)?;
     }
 
     match cli.command {
