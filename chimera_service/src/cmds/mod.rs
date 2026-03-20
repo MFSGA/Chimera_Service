@@ -7,6 +7,7 @@ mod status;
 mod uninstall;
 
 mod server;
+mod start;
 
 /// Nyanpasu Service, a privileged service for managing the core service.
 ///
@@ -35,6 +36,8 @@ enum Commands {
     Install(install::InstallCommand),
     /// Uninstall the service
     Uninstall,
+    /// Start the service
+    Start,
     /// Run the server. It should be called by the service manager.
     Server(server::ServerContext), // The main entry point for the service, other commands are the control plane for the service
     /// Get the status of the service
@@ -54,7 +57,10 @@ pub enum CommandError {
 
     #[error("service already installed")]
     ServiceAlreadyInstalled,
-
+    #[error("service already running")]
+    ServiceAlreadyRunning,
+    #[error("join error: {0}")]
+    JoinError(#[from] tokio::task::JoinError),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 
@@ -76,26 +82,20 @@ pub async fn process() -> Result<(), CommandError> {
         return Err(CommandError::PermissionDenied);
     }
 
+    /* todo: log
     if matches!(cli.command, Some(Commands::Server(_))) {
         logging::init(cli.verbose, true)?;
     } else {
         // todo: used for debug. delete it in the future.
         logging::init(cli.verbose, true)?;
-    }
+    } */
 
     match cli.command {
         Some(Commands::Install(ctx)) => {
-            let result = tokio::task::spawn_blocking(move || install::install(ctx))
-                .await
-                .map_err(anyhow::Error::from)?;
-            Ok(result?)
+            Ok(tokio::task::spawn_blocking(move || install::install(ctx)).await??)
         }
-        Some(Commands::Uninstall) => {
-            let result = tokio::task::spawn_blocking(uninstall::uninstall)
-                .await
-                .map_err(anyhow::Error::from)?;
-            Ok(result?)
-        }
+        Some(Commands::Uninstall) => Ok(tokio::task::spawn_blocking(uninstall::uninstall).await??),
+        Some(Commands::Start) => Ok(tokio::task::spawn_blocking(start::start).await??),
         Some(Commands::Status(ctx)) => Ok(status::status(ctx).await?),
         Some(_) => {
             todo!()
