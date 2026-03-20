@@ -101,8 +101,14 @@ pub async fn process() -> Result<(), CommandError> {
         Some(Commands::Uninstall) => Ok(tokio::task::spawn_blocking(uninstall::uninstall).await??),
         Some(Commands::Start) => Ok(tokio::task::spawn_blocking(start::start).await??),
         Some(Commands::Status(ctx)) => Ok(status::status(ctx).await?),
-        Some(_) => {
+        Some(Commands::Server(ctx)) => {
+            server::server(ctx).await?;
+            Ok(())
+        }
+        Some(Commands::Rpc(ctx)) => {
             todo!()
+            /* rpc::rpc(ctx).await?;
+            Ok(()) */
         }
         None => {
             eprintln!("No command specified");
