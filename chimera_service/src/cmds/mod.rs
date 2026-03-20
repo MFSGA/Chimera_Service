@@ -9,6 +9,8 @@ mod uninstall;
 mod server;
 mod start;
 
+pub use server::SHUTDOWN_TOKEN as SERVER_SHUTDOWN_TOKEN;
+
 /// Nyanpasu Service, a privileged service for managing the core service.
 ///
 /// The main entry point for the service, Other commands are the control plane for the service.

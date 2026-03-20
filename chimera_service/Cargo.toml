@@ -24,14 +24,19 @@ ctrlc = { version = "3", features = ["termination"] }
 
 tracing-panic = "0.1"
 
-nyanpasu-utils = { workspace = true, default-features = false, features = [
-    "dirs",
-    "os",
-    "network",
-] }
+#nyanpasu-utils = { workspace = true, default-features = false, features = [
+#    "dirs",
+#    "os",
+#    "network",
+#] }
 
 # todo: add the features
-chimera_utils = { workspace = true, default-features = false }
+chimera_utils = { workspace = true, default-features = false, features = [
+    "dirs",
+    "os",
+    # "network",
+] }
+
 chimera-ipc = { path = "../chimera_ipc", default-features = false, features = [
     "server",
     "client",

@@ -9,7 +9,7 @@ use std::{
 
 use camino::{Utf8Path, Utf8PathBuf};
 use chimera_ipc::{api::status::CoreState, utils::get_current_ts};
-use nyanpasu_utils::core::{
+use chimera_utils::core::{
     CommandEvent, CoreType,
     instance::{CoreInstance, CoreInstanceBuilder},
 };
@@ -77,8 +77,8 @@ impl CoreManagerService {
         match manager {
             None => Cow::Borrowed(&CoreState::Stopped(None)),
             Some(manager) => Cow::Owned(match manager.instance.state() {
-                nyanpasu_utils::core::instance::CoreInstanceState::Running => CoreState::Running,
-                nyanpasu_utils::core::instance::CoreInstanceState::Stopped => {
+                chimera_utils::core::instance::CoreInstanceState::Running => CoreState::Running,
+                chimera_utils::core::instance::CoreInstanceState::Stopped => {
                     CoreState::Stopped(None)
                 }
             }),

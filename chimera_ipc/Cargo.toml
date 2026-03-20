@@ -8,7 +8,7 @@ client = []
 server = ["dep:axum", "dep:axum-extra", "dep:tower", "dep:widestring"]
 
 [dependencies]
-nyanpasu-utils = { workspace = true, default-features = false, features = [
+chimera_utils = { workspace = true, default-features = false, features = [
     "core_manager",
     "serde",
 ] }

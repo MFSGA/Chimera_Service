@@ -6,7 +6,7 @@ pub const CORE_START_ENDPOINT: &str = "/core/start";
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CoreStartReq<'n> {
-    pub core_type: Cow<'n, nyanpasu_utils::core::CoreType>,
+    pub core_type: Cow<'n, chimera_utils::core::CoreType>,
     pub config_file: Cow<'n, PathBuf>,
 }
 

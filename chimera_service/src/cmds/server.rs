@@ -32,7 +32,7 @@ pub async fn server_inner(
     ctx: ServerContext,
     token: CancellationToken,
 ) -> Result<(), CommandError> {
-    nyanpasu_utils::os::kill_by_pid_file(
+    chimera_utils::os::kill_by_pid_file(
         crate::utils::dirs::service_pid_file(),
         // TODO: use common name
         Some(&["mihomo", "clash"]),
@@ -63,7 +63,7 @@ pub async fn server_inner(
     }
 
     // Write current process id to file
-    if let Err(e) = nyanpasu_utils::os::create_pid_file(
+    if let Err(e) = chimera_utils::os::create_pid_file(
         crate::utils::dirs::service_pid_file(),
         std::process::id(),
     )
