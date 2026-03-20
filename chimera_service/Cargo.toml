@@ -73,6 +73,7 @@ futures-util = { workspace = true }
 dashmap = "6"
 axum = { workspace = true, features = ["macros"] }
 tower-http = { version = "0.6", features = ["trace"] }
+camino = { version = "1.1", features = ["serde1"] }
 
 [target.'cfg(windows)'.dependencies]
 check_elevation = "0.2.4"

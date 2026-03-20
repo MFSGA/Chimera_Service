@@ -1,4 +1,4 @@
-// use crate::api::R;
+use crate::api::R;
 use serde::{Deserialize, Serialize};
 use std::{borrow::Cow, path::PathBuf};
 
@@ -38,3 +38,5 @@ pub struct StatusResBody<'a> {
     pub core_infos: CoreInfos,
     pub runtime_infos: RuntimeInfos<'a>,
 }
+
+pub type StatusRes<'a> = R<'a, StatusResBody<'a>>;

@@ -337,6 +337,7 @@ dependencies = [
  "anyhow",
  "axum",
  "bounded-vec-deque",
+ "camino",
  "check_elevation",
  "chimera-ipc",
  "chimera_utils",
