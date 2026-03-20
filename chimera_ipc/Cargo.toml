@@ -37,6 +37,7 @@ tower = { version = "0.5", features = ["util"], optional = true }
 widestring = { version = "1", optional = true }
 
 tracing-attributes = { workspace = true }
+simd-json = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true }

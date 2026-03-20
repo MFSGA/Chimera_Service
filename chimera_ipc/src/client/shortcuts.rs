@@ -4,7 +4,7 @@ use bytes::Bytes;
 use http_body_util::Empty;
 use hyper::Request;
 
-use crate::{SERVICE_PLACEHOLDER, api};
+use crate::{SERVICE_PLACEHOLDER, api, client::send_request};
 
 use super::ClientError;
 
@@ -12,7 +12,7 @@ use std::result::Result as StdResult;
 
 pub struct Client<'a>(Cow<'a, str>);
 
-type Result<'a, T, E = ClientError> = StdResult<T, E>;
+type Result<'a, T, E = ClientError<'a>> = StdResult<T, E>;
 
 impl<'a> Client<'a> {
     pub fn new(placeholder: &'a str) -> Self {
@@ -25,14 +25,13 @@ impl<'a> Client<'a> {
     }
 
     pub async fn status(&self) -> Result<'_, api::status::StatusResBody<'_>> {
-        todo!()
-        /* let request = Request::get(api::status::STATUS_ENDPOINT).body(Empty::<Bytes>::new())?;
+        let request = Request::get(api::status::STATUS_ENDPOINT).body(Empty::<Bytes>::new())?;
         let response = send_request(&self.0, request)
             .await?
             .cast_body::<api::status::StatusRes<'_>>()
             .await?
             .ok()?;
         let data = response.data.unwrap();
-        Ok(data) */
+        Ok(data)
     }
 }

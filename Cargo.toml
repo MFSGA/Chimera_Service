@@ -45,6 +45,8 @@ windows = { version = "0.61", features = [
     "Win32_Storage_FileSystem",
 ] }
 
+simd-json = "0.16"
+
 [profile.release]
 panic = "unwind"
 codegen-units = 1
