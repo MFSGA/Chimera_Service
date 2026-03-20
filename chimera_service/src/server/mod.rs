@@ -3,13 +3,13 @@ mod instance;
 mod logger;
 mod routing;
 
-pub use instance::CoreManagerService as CoreManager;
-pub use logger::Logger;
 use chimera_ipc::{
     SERVICE_PLACEHOLDER,
     api::ws::events::{Event as WsEvent, TraceLog},
     server::create_server,
 };
+pub use instance::CoreManagerService as CoreManager;
+pub use logger::Logger;
 use routing::{AppState, create_router};
 use tokio_util::sync::CancellationToken;
 use tracing_attributes::instrument;

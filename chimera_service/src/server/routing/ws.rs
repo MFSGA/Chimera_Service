@@ -10,9 +10,9 @@ use axum::{
     response::Response,
     routing::any,
 };
+use chimera_ipc::api::ws::events::{EVENT_URI, Event};
 use dashmap::DashMap;
 use futures_util::{SinkExt, StreamExt};
-use chimera_ipc::api::ws::events::{EVENT_URI, Event};
 use tokio::sync::mpsc::Sender as MpscSender;
 
 type SocketId = usize;
