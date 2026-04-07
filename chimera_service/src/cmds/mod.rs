@@ -9,6 +9,8 @@ mod uninstall;
 mod server;
 mod start;
 
+mod stop;
+
 pub use server::SHUTDOWN_TOKEN as SERVER_SHUTDOWN_TOKEN;
 
 /// Nyanpasu Service, a privileged service for managing the core service.
@@ -40,6 +42,8 @@ enum Commands {
     Uninstall,
     /// Start the service
     Start,
+    /// Stop the service
+    Stop,
     /// Run the server. It should be called by the service manager.
     Server(server::ServerContext), // The main entry point for the service, other commands are the control plane for the service
     /// Get the status of the service
@@ -102,6 +106,7 @@ pub async fn process() -> Result<(), CommandError> {
         }
         Some(Commands::Uninstall) => Ok(tokio::task::spawn_blocking(uninstall::uninstall).await??),
         Some(Commands::Start) => Ok(tokio::task::spawn_blocking(start::start).await??),
+        Some(Commands::Stop) => Ok(tokio::task::spawn_blocking(stop::stop).await??),
         Some(Commands::Status(ctx)) => Ok(status::status(ctx).await?),
         Some(Commands::Server(ctx)) => {
             server::server(ctx).await?;
