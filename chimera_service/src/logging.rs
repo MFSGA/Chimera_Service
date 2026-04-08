@@ -22,7 +22,7 @@ fn get_file_appender(max_files: usize) -> Result<(NonBlocking, WorkerGuard)> {
 }
 
 /// initial instance global logger
-pub fn init(debug: bool, write_file: bool) -> anyhow::Result<()> {
+pub fn init(_debug: bool, write_file: bool) -> anyhow::Result<()> {
     if write_file {
         let log_dir = crate::utils::dirs::service_logs_dir();
         if !log_dir.exists() {
@@ -33,7 +33,7 @@ pub fn init(debug: bool, write_file: bool) -> anyhow::Result<()> {
         (
             {
                 #[cfg(not(feature = "tracing"))]
-                if debug {
+                if _debug {
                     LevelFilter::DEBUG
                 } else {
                     LevelFilter::INFO

@@ -1,3 +1,4 @@
+#[cfg(not(feature = "dev"))]
 use crate::logging;
 use clap::{Parser, Subcommand};
 
@@ -113,9 +114,8 @@ pub async fn process() -> Result<(), CommandError> {
             Ok(())
         }
         Some(Commands::Rpc(ctx)) => {
-            todo!()
-            /* rpc::rpc(ctx).await?;
-            Ok(()) */
+            rpc::rpc(ctx).await?;
+            Ok(())
         }
         None => {
             eprintln!("No command specified");

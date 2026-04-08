@@ -48,4 +48,64 @@ impl<'a> Client<'a> {
         response.ok()?;
         Ok(())
     }
+
+    pub async fn stop_core(&self) -> Result<'_, ()> {
+        let request =
+            Request::post(api::core::stop::CORE_STOP_ENDPOINT).body(Empty::<Bytes>::new())?;
+        let response = send_request(&self.0, request)
+            .await?
+            .cast_body::<api::core::stop::CoreStopRes>()
+            .await?;
+        response.ok()?;
+        Ok(())
+    }
+
+    pub async fn restart_core(&self) -> Result<'_, ()> {
+        let request =
+            Request::post(api::core::restart::CORE_RESTART_ENDPOINT).body(Empty::<Bytes>::new())?;
+        let response = send_request(&self.0, request)
+            .await?
+            .cast_body::<api::core::restart::CoreRestartRes>()
+            .await?;
+        response.ok()?;
+        Ok(())
+    }
+
+    pub async fn inspect_logs(&self) -> Result<'_, api::log::LogsResBody<'_>> {
+        let request = Request::get(api::log::LOGS_INSPECT_ENDPOINT).body(Empty::<Bytes>::new())?;
+        let response = send_request(&self.0, request)
+            .await?
+            .cast_body::<api::log::LogsRes<'_>>()
+            .await?
+            .ok()?;
+        let data = response.data.unwrap();
+        Ok(data)
+    }
+
+    pub async fn retrieve_logs(&self) -> Result<'_, api::log::LogsResBody<'_>> {
+        let request = Request::get(api::log::LOGS_RETRIEVE_ENDPOINT).body(Empty::<Bytes>::new())?;
+        let response = send_request(&self.0, request)
+            .await?
+            .cast_body::<api::log::LogsRes<'_>>()
+            .await?
+            .ok()?;
+        let data = response.data.unwrap();
+        Ok(data)
+    }
+
+    pub async fn set_dns(
+        &self,
+        payload: &api::network::set_dns::NetworkSetDnsReq<'_>,
+    ) -> Result<'_, ()> {
+        let payload = simd_json::serde::to_string(payload)?;
+        let request = Request::post(api::network::set_dns::NETWORK_SET_DNS_ENDPOINT)
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from(payload))?;
+        let response = send_request(&self.0, request)
+            .await?
+            .cast_body::<api::network::set_dns::NetworkSetDnsRes>()
+            .await?;
+        response.ok()?;
+        Ok(())
+    }
 }
