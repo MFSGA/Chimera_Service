@@ -379,6 +379,7 @@ dependencies = [
  "tracing-log",
  "tracing-panic",
  "tracing-subscriber",
+ "windows 0.61.3",
  "windows-service",
 ]
 

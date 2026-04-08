@@ -85,3 +85,4 @@ sysinfo = "0.36.1"
 [target.'cfg(windows)'.dependencies]
 check_elevation = "0.2.4"
 windows-service = "0.8"
+windows = { workspace = true }
