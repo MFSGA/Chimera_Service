@@ -1,18 +1,16 @@
 
-## [1.7.0] - 2026-04-08 10:22:14
+## [1.7.1] - 2026-04-08 10:49:35
 
 
-### ✨ Features
+### 🐛 Bug Fixes
 
-- **acl:** For windows security by @MFSGA 
-
-- **rpc:** Add more rpc command by @MFSGA 
+- Reduce some arch by @MFSGA 
 
 -----------------
 
 
 
-**Full Changelog**: https://github.com/MFSGA/Chimera_Service/compare/v1.6.0...v1.7.0
+**Full Changelog**: https://github.com/MFSGA/Chimera_Service/compare/v1.7.0...v1.7.1
 
 
 
