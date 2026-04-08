@@ -1,4 +1,4 @@
-// pub mod user;
+pub mod user;
 
 pub fn register_ctrlc_handler() -> tokio::sync::mpsc::Receiver<()> {
     let (tx, rx) = tokio::sync::mpsc::channel(1);
