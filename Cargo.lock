@@ -385,7 +385,7 @@ dependencies = [
 [[package]]
 name = "chimera_utils"
 version = "0.1.0"
-source = "git+https://github.com/MFSGA/Chimera_Utils.git#e1e7a8eb78e85ace734f18f219521653b4263f3a"
+source = "git+https://github.com/MFSGA/Chimera_Utils.git#0ed55a482ee67bdca06af6526382111b64fa6473"
 dependencies = [
  "camino",
  "constcat",
@@ -394,6 +394,7 @@ dependencies = [
  "encoding_rs",
  "kill_tree",
  "memchr",
+ "network-utils",
  "os-utils",
  "os_pipe",
  "parking_lot",
@@ -733,13 +734,13 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users 0.5.2",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
 name = "dirs-utils"
 version = "0.1.0"
-source = "git+https://github.com/MFSGA/Chimera_Utils.git#e1e7a8eb78e85ace734f18f219521653b4263f3a"
+source = "git+https://github.com/MFSGA/Chimera_Utils.git#0ed55a482ee67bdca06af6526382111b64fa6473"
 dependencies = [
  "dirs 6.0.0",
  "thiserror 2.0.18",
@@ -810,8 +811,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
+
+[[package]]
+name = "fastrand"
+version = "2.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9f1f227452a390804cdb637b74a86990f2a7d7ba4b7d5693aac9b4dd6defd8d6"
 
 [[package]]
 name = "flate2"
@@ -1285,6 +1292,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d26c52dbd32dccf2d10cac7725f8eae5296885fb5703b261f7d0a0739ec807ab"
 
 [[package]]
+name = "linux-raw-sys"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df1d3c3b53da64cf5760482273a98e575c651a67eec7f77df96b5b642de8f039"
+
+[[package]]
 name = "lock_api"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1354,6 +1367,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "network-utils"
+version = "0.1.0"
+source = "git+https://github.com/MFSGA/Chimera_Utils.git#0ed55a482ee67bdca06af6526382111b64fa6473"
+dependencies = [
+ "log",
+ "tempfile",
+]
+
+[[package]]
 name = "nix"
 version = "0.27.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1401,7 +1423,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1474,7 +1496,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 [[package]]
 name = "os-utils"
 version = "0.1.0"
-source = "git+https://github.com/MFSGA/Chimera_Utils.git#e1e7a8eb78e85ace734f18f219521653b4263f3a"
+source = "git+https://github.com/MFSGA/Chimera_Utils.git#0ed55a482ee67bdca06af6526382111b64fa6473"
 dependencies = [
  "nix 0.31.1",
  "shared_child",
@@ -1488,7 +1510,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1794,8 +1816,21 @@ dependencies = [
  "bitflags",
  "errno",
  "libc",
- "linux-raw-sys",
+ "linux-raw-sys 0.4.15",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "rustix"
+version = "1.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "146c9e247ccc180c1f61615433868c99f3de3ae256a30a43b49f67c2d9171f34"
+dependencies = [
+ "bitflags",
+ "errno",
+ "libc",
+ "linux-raw-sys 0.11.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2114,6 +2149,19 @@ checksum = "8e1d1b10ced5ca923a1fcb8d03e96b8d3268065d724548c0211415ff6ac6bac4"
 dependencies = [
  "core-foundation-sys",
  "libc",
+]
+
+[[package]]
+name = "tempfile"
+version = "3.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0136791f7c95b1f6dd99f9cc786b91bb81c3800b639b3478e561ddb7be95e5f1"
+dependencies = [
+ "fastrand",
+ "getrandom 0.3.4",
+ "once_cell",
+ "rustix 1.1.3",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2552,7 +2600,7 @@ dependencies = [
  "either",
  "home",
  "once_cell",
- "rustix",
+ "rustix 0.38.44",
 ]
 
 [[package]]

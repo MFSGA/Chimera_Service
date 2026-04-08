@@ -34,7 +34,7 @@ tracing-panic = "0.1"
 chimera_utils = { workspace = true, default-features = false, features = [
     "dirs",
     "os",
-    # "network",
+    "network",
 ] }
 
 chimera-ipc = { path = "../chimera_ipc", default-features = false, features = [

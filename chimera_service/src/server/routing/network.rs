@@ -6,7 +6,7 @@ use chimera_ipc::api::{
 use std::borrow::Cow;
 
 #[cfg(target_os = "macos")]
-use nyanpasu_utils::network::macos::{get_default_network_hardware_port, set_dns};
+use chimera_utils::network::macos::{get_default_network_hardware_port, set_dns};
 
 pub fn setup<S>() -> Router<S>
 where
