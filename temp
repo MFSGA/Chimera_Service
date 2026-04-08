@@ -1,58 +1,18 @@
 
-## [1.6.0] - 2026-04-08 08:37:11
+## [1.7.0] - 2026-04-08 10:22:14
 
 
 ### ✨ Features
 
-- **command:** Support stop command by @MFSGA 
+- **acl:** For windows security by @MFSGA 
 
-- **dep:** Use the chimera_utils to replace nyampasu_utils by @MFSGA 
-
-- **install:** Completed the command by @MFSGA 
-
-- **install:** Complete the install command by @MFSGA 
-
-- **ipc:** For ipc used in gui by @MFSGA  in [#1](https://github.com/MFSGA/Chimera_Service/pull/1)
-
-- **server:** Add the server command and completed core routing by @MFSGA 
-
-- **server:** Add the server command and completed create_router network ws by @MFSGA 
-
-- **server:** Add the server command and completed create_router status by @MFSGA 
-
-- **server:** Add the server command and completed server::run by @MFSGA 
-
-- **server:** Add the server command just completed server_inner by @MFSGA 
-
-- **specta:** Prepared the feature for gui by @MFSGA 
-
-- **start:** Complete run_service by @MFSGA 
-
-- **start:** Debug start command by @MFSGA 
-
-- **start:** Support start command by @MFSGA 
-
-- **status:** Completed status command ipc->client->shortcut by @MFSGA 
-
-- **uninstall:** Add the command by @MFSGA 
-
-- Support user mod by @MFSGA 
-
-
-### 🐛 Bug Fixes
-
-- Add the right network mod by @MFSGA 
-
-- Add the server for unix machine by @MFSGA 
+- **rpc:** Add more rpc command by @MFSGA 
 
 -----------------
 
 
 
-## New Contributors
-* @github-actions[bot] made their first contribution
-
-**Full Changelog**: https://github.com/MFSGA/Chimera_Service/compare/v1.5.2...v1.6.0
+**Full Changelog**: https://github.com/MFSGA/Chimera_Service/compare/v1.6.0...v1.7.0
 
 
 
