@@ -1,16 +1,16 @@
 
-## [1.7.1] - 2026-04-08 10:49:35
+## [1.7.2] - 2026-04-16 19:32:55
 
 
-### 🐛 Bug Fixes
+### ✨ Features
 
-- Reduce some arch by @MFSGA 
+- **root:** Must_check_elevation for linux by @MFSGA 
 
 -----------------
 
 
 
-**Full Changelog**: https://github.com/MFSGA/Chimera_Service/compare/v1.7.0...v1.7.1
+**Full Changelog**: https://github.com/MFSGA/Chimera_Service/compare/v1.7.1...v1.7.2
 
 
 

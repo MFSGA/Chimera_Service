@@ -321,7 +321,7 @@ dependencies = [
 
 [[package]]
 name = "chimera-ipc"
-version = "1.7.1"
+version = "1.7.2"
 dependencies = [
  "anyhow",
  "axum",
@@ -352,7 +352,7 @@ dependencies = [
 
 [[package]]
 name = "chimera-service"
-version = "1.7.1"
+version = "1.7.2"
 dependencies = [
  "anyhow",
  "axum",
