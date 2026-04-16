@@ -28,7 +28,8 @@ pub fn must_check_elevation() -> bool {
     }
     #[cfg(not(windows))]
     {
-        todo!()
+        use whoami::username;
+        username() == "root"
     }
 }
 
