@@ -105,6 +105,7 @@ pub async fn process() -> Result<(), CommandError> {
         Some(Commands::Install(ctx)) => {
             Ok(tokio::task::spawn_blocking(move || install::install(ctx)).await??)
         }
+        // todo: support a new command for clear all relative service.
         Some(Commands::Uninstall) => Ok(tokio::task::spawn_blocking(uninstall::uninstall).await??),
         Some(Commands::Start) => Ok(tokio::task::spawn_blocking(start::start).await??),
         Some(Commands::Stop) => Ok(tokio::task::spawn_blocking(stop::stop).await??),
