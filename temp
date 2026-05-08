@@ -1,16 +1,16 @@
 
-## [1.7.2] - 2026-04-16 19:32:55
+## [1.8.0] - 2026-05-08 03:18:20
 
 
 ### ✨ Features
 
-- **root:** Must_check_elevation for linux by @MFSGA 
+- Support print_version by @MFSGA 
 
 -----------------
 
 
 
-**Full Changelog**: https://github.com/MFSGA/Chimera_Service/compare/v1.7.1...v1.7.2
+**Full Changelog**: https://github.com/MFSGA/Chimera_Service/compare/v1.7.2...v1.8.0
 
 
 
