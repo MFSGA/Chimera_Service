@@ -1,0 +1,36 @@
+name: Renovate
+
+on:
+  schedule:
+    - cron: "0 18 * * *"
+  workflow_dispatch:
+    inputs:
+      logLevel:
+        description: Renovate log level
+        type: choice
+        default: info
+        options:
+          - info
+          - debug
+          - trace
+
+concurrency:
+  group: renovate
+  cancel-in-progress: false
+
+jobs:
+  renovate:
+    name: Renovate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@v6.0.3
+
+      - name: Self-hosted Renovate
+        uses: renovatebot/github-action@v46.1.17
+        with:
+          configurationFile: .github/renovate-global.json
+          token: ${{ secrets.RENOVATE_TOKEN }}
+        env:
+          LOG_LEVEL: ${{ inputs.logLevel || 'info' }}
