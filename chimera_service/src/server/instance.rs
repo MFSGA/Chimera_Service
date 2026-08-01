@@ -3,19 +3,27 @@ use std::{
     path::PathBuf,
     sync::{
         Arc,
-        atomic::{AtomicI64, Ordering},
+        atomic::{AtomicI64, AtomicU64, Ordering},
     },
 };
-
 use camino::{Utf8Path, Utf8PathBuf};
-use chimera_ipc::{api::status::CoreState, utils::get_current_ts};
-use chimera_utils::core::{
-    CommandEvent, CoreType,
-    instance::{CoreInstance, CoreInstanceBuilder},
+use chimera_ipc::{
+    api::{
+        core::apply::{ApplyOutcomeKind, CoreApplyData},
+        error_kind,
+        status::{ConfigRevisionInfo, CoreState, CoreStateDetail, RevisionIdInfo},
+    },
+    utils::get_current_ts,
 };
+use chimera_utils::core::{
+    ClashCoreType, CommandEvent, CoreType,
+    instance::{CoreInstance, CoreInstanceBuilder, MIHOMO_SAFE_PATHS_ENV_NAME},
+};
+use nyanpasu_core_metadata::ClashCoreResourceVariant;
 use tokio::{
+    process::Command,
     spawn,
-    sync::{Mutex, mpsc::Sender as MpscSender},
+    sync::{Mutex, Semaphore, mpsc::Sender as MpscSender},
 };
 use tokio_util::{sync::CancellationToken, task::task_tracker::TaskTracker};
 use tracing::instrument;
@@ -27,10 +35,47 @@ struct CoreManager {
     cancel_token: CancellationToken,
     config_path: Utf8PathBuf,
     tracker: Option<TaskTracker>,
+    revision: ConfigRevisionInfo,
 }
 
 const SIGKILL: i32 = 9;
 const SIGTERM: i32 = 15;
+const MAX_CONCURRENT_CHECKS: usize = 2;
+const CONFIG_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+#[derive(Debug, thiserror::Error)]
+pub enum CoreOperationError {
+    #[error("core have not been started yet")]
+    NotStarted,
+    #[error("the running config revision has changed")]
+    RevisionConflict,
+    #[error("config file is unavailable: {0}")]
+    ConfigNotFound(#[source] anyhow::Error),
+    #[error("core binary is unavailable: {0}")]
+    BinaryNotFound(#[source] anyhow::Error),
+    #[error("core rejected the config: {0}")]
+    ConfigCheckFailed(#[source] anyhow::Error),
+    #[error("at most {MAX_CONCURRENT_CHECKS} config checks may run at once; retry")]
+    CheckBusy,
+    #[error("failed to apply config: {0}")]
+    ApplyFailed(#[source] anyhow::Error),
+}
+
+impl CoreOperationError {
+    pub fn kind(&self) -> Option<&'static str> {
+        match self {
+            Self::NotStarted => Some(error_kind::NOT_STARTED),
+            Self::RevisionConflict => Some(error_kind::REVISION_CONFLICT),
+            Self::ConfigNotFound(_) => Some(error_kind::CONFIG_NOT_FOUND),
+            Self::BinaryNotFound(_) => Some(error_kind::BINARY_NOT_FOUND),
+            Self::ConfigCheckFailed(_) => Some(error_kind::CONFIG_CHECK_FAILED),
+            Self::ApplyFailed(_) => Some(error_kind::APPLY_FAILED),
+            Self::CheckBusy => None,
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct CoreManagerService {
@@ -38,6 +83,8 @@ pub struct CoreManagerService {
     state_changed_at: Arc<AtomicI64>,
     state_changed_notify: Arc<Option<MpscSender<CoreState>>>,
     cancel_token: CancellationToken,
+    next_epoch: Arc<AtomicU64>,
+    check_slots: Arc<Semaphore>,
 }
 
 impl CoreManagerService {
@@ -47,6 +94,8 @@ impl CoreManagerService {
             state_changed_at: Arc::new(AtomicI64::new(0)),
             state_changed_notify: Arc::new(Some(notify)),
             cancel_token,
+            next_epoch: Arc::new(AtomicU64::new(1)),
+            check_slots: Arc::new(Semaphore::new(MAX_CONCURRENT_CHECKS)),
         }
     }
 
@@ -57,18 +106,32 @@ impl CoreManagerService {
             .state_changed_at
             .load(std::sync::atomic::Ordering::Relaxed);
         let state = Self::state_(manager.as_ref()).into_owned();
+        let detail = match &state {
+            CoreState::Stopped(reason) => Some(CoreStateDetail::Stopped {
+                reason: reason.clone(),
+            }),
+            CoreState::Running => None,
+        };
         match *manager {
             Some(ref manager) => chimera_ipc::api::status::CoreInfos {
                 r#type: Some(manager.instance.core_type.clone()),
                 state,
                 state_changed_at,
                 config_path: Some(manager.config_path.clone().into()),
+                controller: None,
+                health: None,
+                revision: Some(manager.revision.clone()),
+                detail,
             },
             None => chimera_ipc::api::status::CoreInfos {
                 r#type: None,
                 state,
                 state_changed_at,
                 config_path: None,
+                controller: None,
+                health: None,
+                revision: None,
+                detail,
             },
         }
     }
@@ -185,6 +248,14 @@ impl CoreManagerService {
             Utf8PathBuf::from_path_buf(dunce::simplified(config_path.as_std_path()).to_path_buf())
                 .unwrap();
         tokio::fs::metadata(&config_path).await?; // check if the file exists
+        let config_bytes = tokio::fs::read(&config_path).await?;
+        let config_hash = fnv1a_hex(&config_bytes);
+        let revision = ConfigRevisionInfo {
+            epoch: self.next_epoch.fetch_add(1, Ordering::Relaxed),
+            generation: 1,
+            source_hash: config_hash.clone(),
+            effective_hash: config_hash,
+        };
         let infos = consts::RuntimeInfos::global();
         let app_dir = infos.nyanpasu_data_dir.clone();
         let binary_path = find_binary_path(core_type)?;
@@ -314,18 +385,102 @@ impl CoreManagerService {
 /// Search the binary path of the core: Data Dir -> Sidecar Dir
 pub fn find_binary_path(core_type: &CoreType) -> std::io::Result<PathBuf> {
     let infos = consts::RuntimeInfos::global();
+    let binary_name = resource_variant(core_type)
+        .map(|variant| variant.binary_name())
+        .unwrap_or_else(|| core_type.get_executable_name());
     let data_dir = &infos.nyanpasu_data_dir;
-    let binary_path = data_dir.join(core_type.get_executable_name());
+    let binary_path = data_dir.join(binary_name);
     if binary_path.exists() {
         return Ok(binary_path);
     }
     let app_dir = &infos.nyanpasu_app_dir;
-    let binary_path = app_dir.join(core_type.get_executable_name());
+    let binary_path = app_dir.join(binary_name);
     if binary_path.exists() {
         return Ok(binary_path);
     }
     Err(std::io::Error::new(
         std::io::ErrorKind::NotFound,
-        format!("{} not found", core_type.get_executable_name()),
+        format!("{binary_name} not found"),
     ))
+}
+
+fn resource_variant(core_type: &CoreType) -> Option<ClashCoreResourceVariant> {
+    match core_type {
+        CoreType::Clash(ClashCoreType::Mihomo) => Some(ClashCoreResourceVariant::Mihomo),
+        CoreType::Clash(ClashCoreType::MihomoAlpha) => {
+            Some(ClashCoreResourceVariant::MihomoAlpha)
+        }
+        CoreType::Clash(ClashCoreType::ClashRust) => Some(ClashCoreResourceVariant::ClashRust),
+        CoreType::Clash(ClashCoreType::ClashRustAlpha) => {
+            Some(ClashCoreResourceVariant::ClashRustAlpha)
+        }
+        CoreType::Clash(ClashCoreType::ClashPremium) => {
+            Some(ClashCoreResourceVariant::ClashPremium)
+        }
+        CoreType::Clash(ClashCoreType::ChimeraClient) | CoreType::SingBox => None,
+    }
+}
+
+async fn run_config_check(
+    core_type: &CoreType,
+    config_path: &Utf8Path,
+    binary_path: &Utf8Path,
+    app_dir: &Utf8Path,
+) -> Result<(), CoreOperationError> {
+    let config_dir = config_path.parent().ok_or_else(|| {
+        CoreOperationError::ConfigCheckFailed(anyhow::anyhow!(
+            "config path has no parent directory"
+        ))
+    })?;
+    let mut command = Command::new(binary_path.as_std_path());
+    command
+        .arg("-t")
+        .arg("-d")
+        .arg(app_dir.as_std_path())
+        .arg("-f")
+        .arg(config_path.as_std_path())
+        .env(
+            MIHOMO_SAFE_PATHS_ENV_NAME,
+            CoreInstance::get_mihomo_safe_paths(app_dir, config_dir, None),
+        )
+        .kill_on_drop(true);
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+
+    let output = tokio::time::timeout(CONFIG_CHECK_TIMEOUT, command.output())
+        .await
+        .map_err(|_| {
+            CoreOperationError::ConfigCheckFailed(anyhow::anyhow!(
+                "config check timed out after {} seconds",
+                CONFIG_CHECK_TIMEOUT.as_secs()
+            ))
+        })?
+        .map_err(|error| CoreOperationError::ConfigCheckFailed(error.into()))?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+    let diagnostic = if !matches!(core_type, CoreType::Clash(ClashCoreType::ClashRust)) {
+        chimera_utils::core::utils::parse_check_output(
+            String::from_utf8_lossy(&output.stdout).into_owned(),
+        )
+    } else {
+        format!(
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+    };
+    Err(CoreOperationError::ConfigCheckFailed(anyhow::anyhow!(
+        diagnostic
+    )))
+}
+
+fn fnv1a_hex(bytes: &[u8]) -> String {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{hash:016x}")
 }
