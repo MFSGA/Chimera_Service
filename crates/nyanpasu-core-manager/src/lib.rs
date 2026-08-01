@@ -13,7 +13,10 @@ pub use clash_api::Host;
 pub use error::Error;
 pub use health::{
     HealthPolicy,
-    probe::{HealthProbe, ProbeContext, ProbeFuture, ProbeHandle, ProbePhase, ProbeResult},
+    probe::{
+        ControllerVersionProbe, HealthProbe, ProbeContext, ProbeFuture, ProbeHandle, ProbePhase,
+        ProbeResult,
+    },
 };
 pub use manager::{ApplyOutcome, CoreManager, CoreManagerBuilder, DegradeReason, SwitchOutcome};
 pub use spec::{

@@ -1,10 +1,10 @@
 //! Custom readiness and liveness probes.
 
-use std::{future::Future, pin::Pin, sync::Arc};
+use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use tokio_util::sync::CancellationToken;
 
-use crate::ResolvedController;
+use crate::{Error, ResolvedController};
 
 /// The boxed future returned by an object-safe [`HealthProbe`].
 pub type ProbeFuture<'a> = Pin<Box<dyn Future<Output = ProbeResult> + Send + 'a>>;
@@ -97,6 +97,37 @@ where
     }
 }
 
+/// Default readiness probe: healthy when the controller answers `/version`.
+pub struct ControllerVersionProbe {
+    client: clash_api::Client,
+}
+
+impl ControllerVersionProbe {
+    pub fn new(controller: &ResolvedController) -> Result<Self, Error> {
+        let mut builder = clash_api::Client::builder(controller.host.clone())
+            .timeout(Duration::from_secs(1));
+        if let Some(secret) = &controller.secret {
+            builder = builder.secret(secret.as_str());
+        }
+        Ok(Self {
+            client: builder.build()?,
+        })
+    }
+}
+
+impl HealthProbe for ControllerVersionProbe {
+    fn check<'a>(&'a self, _context: ProbeContext) -> ProbeFuture<'a> {
+        Box::pin(async move {
+            match self.client.version().await {
+                Ok(_) => ProbeResult::Healthy,
+                Err(error) => ProbeResult::Unhealthy {
+                    detail: Some(error.to_string()),
+                },
+            }
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,6 +155,33 @@ mod tests {
             }
         });
         assert!(probe.check(context()).await.is_healthy());
+    }
+
+    #[tokio::test]
+    async fn controller_version_probe_reflects_endpoint_health() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 1024];
+            let _ = stream.read(&mut request).await;
+            let body = r#"{"meta":true,"version":"test"}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        });
+        let controller = ResolvedController {
+            host: clash_api::Host::http(address.to_string()).unwrap(),
+            secret: None,
+        };
+        let probe = ControllerVersionProbe::new(&controller).unwrap();
+        let mut context = context();
+        context.controller = Arc::new(controller);
+        assert!(probe.check(context).await.is_healthy());
     }
 
     #[test]
