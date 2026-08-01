@@ -21,6 +21,7 @@ pub use health::{
     },
 };
 pub use instance::{Instance, InstanceBuilder};
+pub use kind::CoreKind;
 pub use manager::{ApplyOutcome, CoreManager, CoreManagerBuilder, DegradeReason, SwitchOutcome};
 pub use spec::{
     CoreSpec, InstanceOptions, InstanceSpec, LocalIpcPolicy, ManagerOptions, ResolvedController,
