@@ -53,7 +53,7 @@ impl Default for RestartStormPolicy {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Backoff {
     initial: Duration,
     max: Duration,

@@ -360,6 +360,95 @@ impl CoreManager {
         Ok(SwitchOutcome::Hard { reason })
     }
 
+    /// Apply a desired config with optimistic revision checking.
+    ///
+    /// In-place patch/reload classification is still pending. Non-noop changes
+    /// use a checked hard restart; if the desired epoch fails to start, the
+    /// previous source spec is started again and reported as `RolledBack`.
+    pub async fn apply_config(
+        &self,
+        input: InstanceSpec,
+        expected_revision: Option<crate::RevisionId>,
+    ) -> Result<ApplyOutcome, Error> {
+        let _operation = self.inner.operation.lock().await;
+        let (previous_spec, previous_revision) = {
+            let ctrl = self.inner.ctrl.lock().await;
+            let active = ctrl.current.as_ref().ok_or(Error::NotStarted)?;
+            if active.instance.status().state.is_terminal() {
+                return Err(Error::NotStarted);
+            }
+            let actual = active.revision.id();
+            if let Some(expected) = expected_revision
+                && expected != actual
+            {
+                return Err(Error::RevisionConflict {
+                    expected,
+                    actual: Some(actual),
+                });
+            }
+            (active.source_spec.clone(), active.revision.clone())
+        };
+
+        let resolved = self.resolve_core_features(&input.core).await?;
+        let runtime_dir = self
+            .inner
+            .options
+            .runtime_dir
+            .as_ref()
+            .expect("validated runtime directory");
+        let snapshot = ConfigSnapshot::load(&input.config_path).await?;
+        let candidate = snapshot.prepare(
+            self.inner.options.controller_template.as_deref(),
+            runtime_dir,
+            previous_revision.epoch,
+            resolved.runtime,
+        )?;
+        if input == previous_spec
+            && candidate.source_hash == previous_revision.source_hash
+            && candidate.effective_hash == previous_revision.effective_hash
+        {
+            return Ok(ApplyOutcome::Noop {
+                revision: previous_revision,
+            });
+        }
+
+        // Reject invalid desired input before taking the active core down.
+        crate::kind::check_config(&input).await?;
+        let switched = process_spec_changed(&previous_spec, &input);
+        self.stop_inner().await?;
+        match self.start_inner(input.clone()).await {
+            Ok(()) => {
+                let revision = self
+                    .status()
+                    .revision
+                    .ok_or_else(|| Error::ApplyFailed("started epoch has no revision".into()))?;
+                Ok(if switched {
+                    ApplyOutcome::Switched { revision }
+                } else {
+                    ApplyOutcome::Restarted { revision }
+                })
+            }
+            Err(apply_error) => match self.start_inner(previous_spec).await {
+                Ok(()) => {
+                    let revision = self.status().revision.ok_or_else(|| {
+                        Error::ApplyRollbackFailed {
+                            apply: apply_error.to_string(),
+                            rollback: "rollback epoch has no revision".into(),
+                        }
+                    })?;
+                    Ok(ApplyOutcome::RolledBack {
+                        revision,
+                        failed_apply: apply_error.to_string(),
+                    })
+                }
+                Err(rollback_error) => Err(Error::ApplyRollbackFailed {
+                    apply: apply_error.to_string(),
+                    rollback: rollback_error.to_string(),
+                }),
+            },
+        }
+    }
+
     /// Switch to a requested spec as a new epoch.
     ///
     /// The graceful-overlap path is still pending; this method currently
@@ -444,6 +533,12 @@ impl Inner {
             status.revision = revision.clone();
         });
     }
+}
+
+fn process_spec_changed(previous: &InstanceSpec, desired: &InstanceSpec) -> bool {
+    previous.core != desired.core
+        || previous.working_dir != desired.working_dir
+        || previous.options != desired.options
 }
 
 fn hard_restart_reason(active: &Active) -> DegradeReason {

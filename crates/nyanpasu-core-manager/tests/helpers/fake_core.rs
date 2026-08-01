@@ -24,6 +24,9 @@ fn main() {
 
     let config_path = value_after(&args, "-f").expect("fake core needs -f <config>");
     let raw = std::fs::read_to_string(config_path).expect("read fake core config");
+    if raw.contains("finish: true") {
+        return;
+    }
     let value: serde_yaml_ng::Value = serde_yaml_ng::from_str(&raw).expect("parse fake core config");
     let document = value.as_mapping().expect("top-level config mapping");
     let address = document

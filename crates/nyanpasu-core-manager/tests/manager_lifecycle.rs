@@ -2,8 +2,8 @@ use std::time::Duration;
 
 use camino::Utf8PathBuf;
 use nyanpasu_core_manager::{
-    CoreKind, CoreManager, CoreSpec, CoreState, DegradeReason, Error, InstanceOptions,
-    InstanceSpec, ManagerOptions, StopReason, SwitchOutcome,
+    ApplyOutcome, CoreKind, CoreManager, CoreSpec, CoreState, DegradeReason, Error,
+    InstanceOptions, InstanceSpec, ManagerOptions, RevisionId, StopReason, SwitchOutcome,
 };
 
 fn free_controller_address() -> String {
@@ -64,6 +64,29 @@ async fn managed_epoch_runs_from_preflight_through_cleanup() {
     assert!(revision.runtime_path.exists());
     assert_eq!(revision.generation, 1);
     assert_eq!(running.spec.as_ref().unwrap().config_path, source_config);
+    assert_eq!(
+        manager
+            .apply_config(spec.clone(), Some(revision.id()))
+            .await
+            .unwrap(),
+        ApplyOutcome::Noop {
+            revision: revision.clone()
+        }
+    );
+    assert!(matches!(
+        manager
+            .apply_config(
+                spec.clone(),
+                Some(RevisionId {
+                    epoch: 99,
+                    generation: 1,
+                    effective_hash: "stale".into(),
+                }),
+            )
+            .await,
+        Err(Error::RevisionConflict { .. })
+    ));
+    assert!(matches!(manager.status().state, CoreState::Running { epoch: 1, .. }));
     assert!(matches!(
         manager.start(spec.clone()).await,
         Err(Error::AlreadyRunning)
@@ -104,6 +127,54 @@ async fn managed_epoch_runs_from_preflight_through_cleanup() {
     ));
     assert!(!switched_revision.runtime_path.exists());
     assert!(matches!(manager.stop().await, Err(Error::NotStarted)));
+}
+
+#[tokio::test]
+async fn failed_apply_rolls_back_to_the_previous_spec() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
+    let runtime_dir = root.join("runtime");
+    let controller = free_controller_address();
+    let source_config = root.join("source.yaml");
+    tokio::fs::write(
+        &source_config,
+        format!("external-controller: {controller}\n"),
+    )
+    .await
+    .unwrap();
+    let manager = CoreManager::new(ManagerOptions {
+        runtime_dir: Some(runtime_dir),
+        ..ManagerOptions::default()
+    })
+    .await
+    .unwrap();
+    let original = fake_core_spec(&root, source_config);
+    manager.start(original.clone()).await.unwrap();
+    let expected = manager.status().revision.unwrap().id();
+
+    let rejected_config = root.join("finish.yaml");
+    tokio::fs::write(
+        &rejected_config,
+        format!("external-controller: {controller}\nfinish: true\n"),
+    )
+    .await
+    .unwrap();
+    let outcome = manager
+        .apply_config(fake_core_spec(&root, rejected_config), Some(expected))
+        .await
+        .unwrap();
+    let ApplyOutcome::RolledBack {
+        revision,
+        failed_apply,
+    } = outcome
+    else {
+        panic!("expected rolled back apply: {outcome:?}");
+    };
+    assert_eq!(revision.epoch, 3);
+    assert!(failed_apply.contains("failed to start") || failed_apply.contains("stopped before"));
+    assert!(matches!(manager.status().state, CoreState::Running { epoch: 3, .. }));
+    assert_eq!(manager.status().spec.unwrap().config_path, original.config_path);
+    manager.stop().await.unwrap();
 }
 
 #[tokio::test]

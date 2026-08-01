@@ -8,7 +8,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{HealthPolicy, kind::CoreKind};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CoreSpec {
     pub kind: CoreKind,
     /// Resolved by the caller; the service keeps binary discovery policy.
@@ -19,7 +19,7 @@ pub struct CoreSpec {
 }
 
 /// Immutable per-epoch launch spec. Changing the config means a new epoch.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstanceSpec {
     pub core: CoreSpec,
     pub config_path: Utf8PathBuf,
@@ -28,7 +28,7 @@ pub struct InstanceSpec {
     pub options: InstanceOptions,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstanceOptions {
     pub startup_timeout: Duration,
     pub health: HealthPolicy,
