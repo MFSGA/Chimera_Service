@@ -4,6 +4,7 @@ members = [
     "chimera_service",
     "chimera_ipc",
     "crates/clash-api",
+    "crates/nyanpasu-core-manager",
     "crates/nyanpasu-core-metadata",
     "crates/nyanpasu-utils",
 ]
