@@ -1,3 +1,4 @@
+pub mod contract;
 pub mod core;
 pub mod log;
 pub mod network;
@@ -24,6 +25,22 @@ impl ResponseCode {
     }
 }
 
+/// Stable machine-readable failure kinds carried by `R::error_kind`.
+pub mod error_kind {
+    pub const NOT_STARTED: &str = "not_started";
+    pub const ALREADY_RUNNING: &str = "already_running";
+    pub const REVISION_CONFLICT: &str = "revision_conflict";
+    pub const QUARANTINED: &str = "quarantined";
+    pub const CONFIG_CHECK_FAILED: &str = "config_check_failed";
+    pub const CONFIG_NOT_FOUND: &str = "config_not_found";
+    pub const BINARY_NOT_FOUND: &str = "binary_not_found";
+    pub const INVALID_CONFIG: &str = "invalid_config";
+    pub const CONTROLLER_MISSING: &str = "controller_missing";
+    pub const APPLY_FAILED: &str = "apply_failed";
+    pub const APPLY_ROLLBACK_FAILED: &str = "apply_rollback_failed";
+    pub const STOP_UNCONFIRMED: &str = "stop_unconfirmed";
+}
+
 /// The IPC Response body definition
 #[derive(Debug, Serialize, Deserialize, Clone, Builder)]
 #[builder(build_fn(validate = "Self::validate"))]
@@ -36,6 +53,9 @@ pub struct R<'a, T: Serialize + DeserializeOwned + Debug> {
     pub data: Option<T>,
     #[builder(setter(skip), default = "self.default_ts()")]
     pub ts: i64,
+    #[builder(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_kind: Option<Cow<'a, str>>,
 }
 
 impl<T: Serialize + DeserializeOwned + Debug> R<'_, T> {
@@ -80,6 +100,18 @@ impl<'a, T: Serialize + DeserializeOwned + Debug> RBuilder<'a, T> {
             msg,
             data: None,
             ts: crate::utils::get_current_ts(),
+            error_kind: None,
+        }
+    }
+
+    pub fn other_error_with_kind(msg: Cow<'a, str>, kind: Option<Cow<'a, str>>) -> R<'a, T> {
+        let code = ResponseCode::OtherError;
+        R {
+            code,
+            msg,
+            data: None,
+            ts: crate::utils::get_current_ts(),
+            error_kind: kind,
         }
     }
 
@@ -90,6 +122,7 @@ impl<'a, T: Serialize + DeserializeOwned + Debug> RBuilder<'a, T> {
             msg: Cow::Borrowed(code.msg()),
             data: Some(data),
             ts: crate::utils::get_current_ts(),
+            error_kind: None,
         }
     }
 }
