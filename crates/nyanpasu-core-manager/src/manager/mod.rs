@@ -189,7 +189,7 @@ impl CoreManager {
             return Err(Error::AlreadyRunning);
         }
         if let Some(stale) = ctrl.current.take() {
-            stale.forwarder.abort();
+            abort_and_await(stale.forwarder).await;
             let _ = stale.instance.stop().await;
             cleanup_epoch(&stale.revision).await;
         }
@@ -324,7 +324,7 @@ impl CoreManager {
             return Err(Error::NotStarted);
         };
         let epoch = active.instance.epoch();
-        active.forwarder.abort();
+        abort_and_await(active.forwarder).await;
         self.inner.status_tx.send_modify(|status| {
             status.state = CoreState::Stopping { epoch };
             status.changed_at = now_ms();
@@ -585,6 +585,11 @@ fn map_instance_state(epoch: u64, state: &InstanceState) -> CoreState {
             reason: Some(reason.clone()),
         },
     }
+}
+
+async fn abort_and_await(handle: tokio::task::JoinHandle<()>) {
+    handle.abort();
+    let _ = handle.await;
 }
 
 async fn cleanup_epoch(revision: &ConfigRevision) {
