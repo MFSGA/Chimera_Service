@@ -62,6 +62,8 @@ pub enum Error {
     #[error("core failed to start; diagnostic log tail:\n{stderr_tail}")]
     StartupFailed { stderr_tail: String },
     #[error(transparent)]
+    Process(#[from] nyanpasu_utils::process::ProcessError),
+    #[error(transparent)]
     Api(#[from] clash_api::Error),
     #[error(transparent)]
     Io(#[from] std::io::Error),
