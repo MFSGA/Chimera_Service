@@ -5,6 +5,7 @@ members = [
     "chimera_ipc",
     "crates/clash-api",
     "crates/nyanpasu-core-metadata",
+    "crates/nyanpasu-utils",
 ]
 
 [workspace.package]
