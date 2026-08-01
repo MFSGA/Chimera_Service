@@ -1,5 +1,9 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Duration};
 
+use reqwest::{
+    Method,
+    header::{AUTHORIZATION, HeaderValue},
+};
 use url::Url;
 
 use crate::{Error, Result};
@@ -53,6 +57,10 @@ impl Secret {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 impl From<String> for Secret {
@@ -70,6 +78,124 @@ impl From<&str> for Secret {
 impl std::fmt::Debug for Secret {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("Secret([REDACTED])")
+    }
+}
+
+#[derive(Clone)]
+pub struct Client {
+    client: reqwest::Client,
+    host: Host,
+    secret: Secret,
+}
+
+pub struct ClientBuilder {
+    host: Host,
+    secret: Secret,
+    timeout: Duration,
+}
+
+impl Client {
+    pub fn builder(host: Host) -> ClientBuilder {
+        ClientBuilder {
+            host,
+            secret: Secret::default(),
+            timeout: Duration::from_secs(10),
+        }
+    }
+
+    pub fn new_http(base_url: impl AsRef<str>) -> Result<Self> {
+        Self::builder(Host::http(base_url)?).build()
+    }
+
+    pub fn host(&self) -> &Host {
+        &self.host
+    }
+
+    pub fn base_url(&self) -> Result<&Url> {
+        match &self.host {
+            Host::Http(url) => Ok(url),
+            Host::NamedPipe(_) => Err(Error::UnsupportedTransport {
+                transport: "named pipe",
+            }),
+            Host::UnixSocket(_) => Err(Error::UnsupportedTransport {
+                transport: "unix socket",
+            }),
+        }
+    }
+
+    pub(crate) fn request(&self, method: Method, endpoint: &str) -> Result<reqwest::RequestBuilder> {
+        let endpoint = endpoint.trim_start_matches('/');
+        let url = self
+            .base_url()?
+            .join(endpoint)
+            .map_err(|source| Error::InvalidBaseUrl {
+                value: endpoint.to_owned(),
+                source,
+            })?;
+        let mut request = self.client.request(method, url);
+        if !self.secret.is_empty() {
+            let mut value = HeaderValue::from_str(&format!("Bearer {}", self.secret.as_str()))
+                .map_err(Error::InvalidSecret)?;
+            value.set_sensitive(true);
+            request = request.header(AUTHORIZATION, value);
+        }
+        Ok(request)
+    }
+
+    pub(crate) async fn send_json<T: serde::de::DeserializeOwned>(
+        &self,
+        operation: &'static str,
+        method: Method,
+        endpoint: &str,
+    ) -> Result<T> {
+        let response = self
+            .request(method, endpoint)?
+            .send()
+            .await
+            .map_err(|source| Error::Request { operation, source })?;
+        let status = response.status();
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|source| Error::Request { operation, source })?;
+        if !status.is_success() {
+            return Err(Error::HttpStatus { operation, status });
+        }
+        serde_json::from_slice(&bytes).map_err(|source| Error::Decode { operation, source })
+    }
+}
+
+impl std::fmt::Debug for Client {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Client")
+            .field("host", &self.host)
+            .field("secret", &self.secret)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ClientBuilder {
+    pub fn secret(mut self, secret: impl Into<Secret>) -> Self {
+        self.secret = secret.into();
+        self
+    }
+
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
+    }
+
+    pub fn build(self) -> Result<Client> {
+        let client = reqwest::Client::builder()
+            .timeout(self.timeout)
+            .build()
+            .map_err(Error::BuildClient)?;
+        Ok(Client {
+            client,
+            host: self.host,
+            secret: self.secret,
+        })
     }
 }
 
@@ -136,5 +262,52 @@ mod tests {
     fn secret_debug_is_redacted() {
         let secret = Secret::new("do-not-log-me");
         assert!(!format!("{secret:?}").contains("do-not-log-me"));
+        let client = Client::builder(Host::http("127.0.0.1:9090").unwrap())
+            .secret("do-not-log-me")
+            .build()
+            .unwrap();
+        assert!(!format!("{client:?}").contains("do-not-log-me"));
+    }
+
+    #[tokio::test]
+    async fn version_request_uses_bearer_auth_and_decodes_response() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = vec![0_u8; 4096];
+            let size = stream.read(&mut request).await.unwrap();
+            let request = String::from_utf8_lossy(&request[..size]);
+            assert!(request.starts_with("GET /version HTTP/1.1"));
+            assert!(request.to_ascii_lowercase().contains("authorization: bearer secret"));
+            let body = r#"{"meta":true,"version":"1.18.9"}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        });
+
+        let client = Client::builder(Host::http(address.to_string()).unwrap())
+            .secret("secret")
+            .build()
+            .unwrap();
+        let version = client.version().await.unwrap();
+        assert!(version.meta);
+        assert_eq!(version.version, "1.18.9");
+        server.await.unwrap();
+    }
+
+    #[test]
+    fn local_transport_reports_an_explicit_capability_gap() {
+        let client = Client::builder(Host::unix_socket("/tmp/controller.sock"))
+            .build()
+            .unwrap();
+        assert!(matches!(
+            client.base_url(),
+            Err(Error::UnsupportedTransport { transport: "unix socket" })
+        ));
     }
 }

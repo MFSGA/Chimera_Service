@@ -1,5 +1,7 @@
+pub mod api;
 pub mod client;
 pub mod error;
 
-pub use client::{ControllerEndpoint, Host, Secret};
+pub use api::Version;
+pub use client::{Client, ClientBuilder, ControllerEndpoint, Host, Secret};
 pub use error::{Error, Result};
