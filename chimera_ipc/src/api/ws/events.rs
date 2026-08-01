@@ -1,7 +1,7 @@
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
-use crate::api::status::CoreState;
+use crate::api::status::{CoreInfos, CoreState};
 
 pub const EVENT_URI: &str = "/ws/events";
 
@@ -18,6 +18,7 @@ pub struct TraceLog {
 pub enum Event {
     Log(TraceLog),
     CoreStateChanged(CoreState),
+    CoreStatusChanged(CoreInfos),
 }
 
 impl Event {
@@ -27,5 +28,9 @@ impl Event {
 
     pub fn new_core_state_changed(state: CoreState) -> Self {
         Self::CoreStateChanged(state)
+    }
+
+    pub fn new_core_status_changed(infos: CoreInfos) -> Self {
+        Self::CoreStatusChanged(infos)
     }
 }

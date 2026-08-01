@@ -1,11 +1,10 @@
 use axum::Router;
 use tracing_attributes::instrument;
-use ws::WsState;
-
-use super::CoreManager;
+use super::{CoreManager, events::EventHub};
 
 pub mod core;
 pub mod logs;
+mod middleware;
 pub mod network;
 pub mod status;
 pub mod ws;

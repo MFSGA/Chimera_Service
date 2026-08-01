@@ -1,4 +1,5 @@
 pub mod consts;
+mod events;
 mod instance;
 mod logger;
 mod routing;
@@ -10,11 +11,10 @@ use chimera_ipc::{
 };
 pub use instance::CoreManagerService as CoreManager;
 pub use logger::Logger;
+use events::{EventHub, should_forward_to_hub};
 use routing::{AppState, create_router};
 use tokio_util::sync::CancellationToken;
 use tracing_attributes::instrument;
-
-use crate::server::routing::ws::WsState;
 
 #[instrument]
 pub async fn run(
@@ -24,42 +24,43 @@ pub async fn run(
 ) -> Result<(), anyhow::Error> {
     let (tx, mut rx) = tokio::sync::mpsc::channel(10);
     let core_manager = CoreManager::new_with_notify(tx, token.clone());
+    let bridge_manager = core_manager.clone();
+    let hub = EventHub::new();
     let state = AppState {
         core_manager,
-        ws_state: WsState::default(),
+        hub: hub.clone(),
     };
-    let ws_state = state.ws_state.clone();
+    let state_hub = hub.clone();
     tokio::spawn(async move {
         while let Some(state) = rx.recv().await {
+            state_hub.send(WsEvent::new_core_status_changed(
+                bridge_manager.status().await,
+            ));
             tracing::info!("State changed: {:?}", state);
-            ws_state
-                .event_broadcast(WsEvent::new_core_state_changed(state))
-                .await;
+            state_hub.send(WsEvent::new_core_state_changed(state));
         }
     });
-    let ws_state = state.ws_state.clone();
-    let tokio_handle = tokio::runtime::Handle::current();
     Logger::global().set_subscriber(Box::new(move |logging| {
-        let ws_state = ws_state.clone();
-        tokio_handle.spawn(async move {
-            ws_state
-                .event_broadcast(WsEvent::new_log(TraceLog {
-                    timestamp: logging.timestamp,
-                    level: logging.level,
-                    message: logging
-                        .fields
-                        .get("message")
-                        .and_then(|v| v.as_str().map(|s| s.to_string()))
-                        .unwrap_or("".to_string()),
-                    target: logging
-                        .fields
-                        .get("target")
-                        .and_then(|v| v.as_str().map(|s| s.to_string()))
-                        .unwrap_or("".to_string()),
-                    fields: logging.fields,
-                }))
-                .await;
-        });
+        let target = logging
+            .fields
+            .get("target")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default()
+            .to_string();
+        if !should_forward_to_hub(&target) {
+            return;
+        }
+        hub.send(WsEvent::new_log(TraceLog {
+            timestamp: logging.timestamp,
+            level: logging.level,
+            message: logging
+                .fields
+                .get("message")
+                .and_then(|value| value.as_str().map(str::to_string))
+                .unwrap_or_default(),
+            target,
+            fields: logging.fields,
+        }));
     }));
 
     let app = create_router(state);
