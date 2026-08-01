@@ -67,12 +67,16 @@ pub struct CoreManagerService {
 }
 
 impl CoreManagerService {
-    pub async fn new(cancel_token: CancellationToken) -> Result<Self, anyhow::Error> {
+    pub async fn new(
+        local_ipc_policy: nyanpasu_core_manager::LocalIpcPolicy,
+        cancel_token: CancellationToken,
+    ) -> Result<Self, anyhow::Error> {
         let infos = RuntimeInfos::global();
         let runtime_dir = Utf8PathBuf::from_path_buf(infos.service_data_dir.join("core-runtime"))
             .map_err(|path| anyhow::anyhow!("runtime directory is not UTF-8: {}", path.display()))?;
         let manager = CoreManager::new(ManagerOptions {
             runtime_dir: Some(runtime_dir),
+            local_ipc_policy,
             cancel_token,
             ..ManagerOptions::default()
         })

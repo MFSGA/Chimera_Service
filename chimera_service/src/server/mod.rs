@@ -19,11 +19,12 @@ use tracing_attributes::instrument;
 
 #[instrument]
 pub async fn run(
+    local_ipc_policy: nyanpasu_core_manager::LocalIpcPolicy,
     token: CancellationToken,
     #[cfg(windows)] sids: &[&str],
     #[cfg(not(windows))] sids: (),
 ) -> Result<(), anyhow::Error> {
-    let core_manager = CoreManager::new(token.clone()).await?;
+    let core_manager = CoreManager::new(local_ipc_policy, token.clone()).await?;
     let bridge_manager = core_manager.clone();
     let mut manager_states = core_manager.subscribe();
     let mut requested_core = core_manager.subscribe_requested_core();

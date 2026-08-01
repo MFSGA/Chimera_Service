@@ -24,6 +24,14 @@ pub struct ServerContext {
     /// run as service
     #[clap(long, default_value = "false")]
     pub service: bool,
+    /// Select the core controller transport policy.
+    #[clap(
+        long,
+        value_enum,
+        default_value = "disable",
+        env = "NYANPASU_LOCAL_IPC_POLICY"
+    )]
+    pub local_ipc_policy: super::LocalIpcPolicyArg,
 }
 
 pub static SHUTDOWN_TOKEN: OnceLock<CancellationToken> = OnceLock::new();
@@ -40,6 +48,7 @@ pub async fn server_inner(
     .await?;
     tracing::info!("nyanpasu config dir: {:?}", ctx.nyanpasu_config_dir);
     tracing::info!("nyanpasu data dir: {:?}", ctx.nyanpasu_data_dir);
+    tracing::info!("local ipc policy: {:?}", ctx.local_ipc_policy);
 
     // Names only: values commonly contain proxy credentials and tokens, and
     // this log buffer is exposed through the IPC log endpoints.
@@ -95,7 +104,7 @@ pub async fn server_inner(
     #[cfg(windows)]
     tracing::info!(sids = ?sids_str, "Loaded acl file");
 
-    crate::server::run(token, sids_str).await?;
+    crate::server::run(ctx.local_ipc_policy.into(), token, sids_str).await?;
     Ok(())
 }
 

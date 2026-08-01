@@ -17,6 +17,25 @@ mod stop;
 
 pub use server::SHUTDOWN_TOKEN as SERVER_SHUTDOWN_TOKEN;
 
+/// CLI spelling of the core manager's controller transport policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+#[value(rename_all = "kebab-case")]
+pub enum LocalIpcPolicyArg {
+    Force,
+    Prefer,
+    Disable,
+}
+
+impl From<LocalIpcPolicyArg> for nyanpasu_core_manager::LocalIpcPolicy {
+    fn from(value: LocalIpcPolicyArg) -> Self {
+        match value {
+            LocalIpcPolicyArg::Force => Self::Force,
+            LocalIpcPolicyArg::Prefer => Self::Prefer,
+            LocalIpcPolicyArg::Disable => Self::Disable,
+        }
+    }
+}
+
 /// Nyanpasu Service, a privileged service for managing the core service.
 ///
 /// The main entry point for the service, Other commands are the control plane for the service.
@@ -310,6 +329,18 @@ mod tests {
             "3:7:fedcba9876543210",
         ],
         &["chimera-service", "rpc", "recover-core"],
+        &[
+            "chimera-service",
+            "server",
+            "--nyanpasu-config-dir",
+            "config",
+            "--nyanpasu-data-dir",
+            "data",
+            "--nyanpasu-app-dir",
+            "app",
+            "--local-ipc-policy",
+            "prefer",
+        ],
     ];
 
     #[test]
@@ -331,6 +362,15 @@ mod tests {
             Cli::try_parse_from(*argv)
                 .unwrap_or_else(|error| panic!("{argv:?} does not parse:\n{error}"));
         }
+    }
+
+    #[test]
+    fn old_server_argv_defaults_to_disabled_local_ipc() {
+        let cli = Cli::try_parse_from(LEGACY_INVOCATIONS[5]).unwrap();
+        let Some(Commands::Server(context)) = cli.command else {
+            panic!("expected server command");
+        };
+        assert_eq!(context.local_ipc_policy, LocalIpcPolicyArg::Disable);
     }
 
     #[test]
