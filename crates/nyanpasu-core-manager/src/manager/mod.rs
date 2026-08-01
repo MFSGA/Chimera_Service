@@ -8,7 +8,7 @@ use std::sync::{
 use tokio::sync::watch;
 
 use crate::{
-    Error, Feature, Instance, ProbeHandle, RuntimeFeature,
+    Error, Instance, ProbeHandle,
     capability::{ResolvedFeatures, VersionCache, resolve_features},
     config::ConfigSnapshot,
     spec::{CoreSpec, InstanceSpec, ManagerOptions},
@@ -75,6 +75,7 @@ struct Inner {
     probes: ProbePlan,
     status_tx: watch::Sender<CoreStatus>,
     version_cache: VersionCache,
+    operation: tokio::sync::Mutex<()>,
     ctrl: tokio::sync::Mutex<Ctrl>,
     epoch: AtomicU64,
 }
@@ -89,8 +90,6 @@ struct Active {
     forwarder: tokio::task::JoinHandle<()>,
     source_spec: InstanceSpec,
     revision: ConfigRevision,
-    capabilities: Vec<Feature>,
-    runtime_features: Vec<RuntimeFeature>,
 }
 
 impl CoreManagerBuilder {
@@ -160,6 +159,7 @@ impl CoreManager {
                 probes,
                 status_tx,
                 version_cache: VersionCache::default(),
+                operation: tokio::sync::Mutex::new(()),
                 ctrl: tokio::sync::Mutex::new(Ctrl::default()),
                 epoch: AtomicU64::new(0),
             }),
@@ -175,6 +175,11 @@ impl CoreManager {
     }
 
     pub async fn start(&self, spec: InstanceSpec) -> Result<(), Error> {
+        let _operation = self.inner.operation.lock().await;
+        self.start_inner(spec).await
+    }
+
+    async fn start_inner(&self, spec: InstanceSpec) -> Result<(), Error> {
         let mut ctrl = self.inner.ctrl.lock().await;
         if ctrl
             .current
@@ -199,6 +204,7 @@ impl CoreManager {
             .expect("validated runtime directory");
         tokio::fs::create_dir_all(runtime_dir).await?;
         let snapshot = ConfigSnapshot::load(&spec.config_path).await?;
+        let source_path = snapshot.source_path().to_owned();
         let prepared = snapshot.prepare(
             self.inner.options.controller_template.as_deref(),
             runtime_dir,
@@ -225,7 +231,7 @@ impl CoreManager {
         let runtime_features: Vec<_> = resolved.runtime.iter().collect();
         let summary = SpecSummary {
             kind: spec.core.kind,
-            config_path: spec.config_path.clone(),
+            config_path: source_path.clone(),
             capabilities: capabilities.clone(),
             runtime_features: runtime_features.clone(),
         };
@@ -285,7 +291,7 @@ impl CoreManager {
             instance.status().health,
             Some(SpecSummary {
                 kind: spec.core.kind,
-                config_path: spec.config_path.clone(),
+                config_path: source_path,
                 capabilities: capabilities.clone(),
                 runtime_features: runtime_features.clone(),
             }),
@@ -298,13 +304,16 @@ impl CoreManager {
             forwarder,
             source_spec: spec,
             revision,
-            capabilities,
-            runtime_features,
         });
         Ok(())
     }
 
     pub async fn stop(&self) -> Result<(), Error> {
+        let _operation = self.inner.operation.lock().await;
+        self.stop_inner().await
+    }
+
+    async fn stop_inner(&self) -> Result<(), Error> {
         let mut ctrl = self.inner.ctrl.lock().await;
         let Some(active) = ctrl.current.take() else {
             return Err(Error::NotStarted);
@@ -327,6 +336,23 @@ impl CoreManager {
             None,
         );
         Ok(())
+    }
+
+    /// Restart the last requested spec as a new epoch.
+    ///
+    /// This currently performs the hard-switch path. HTTP controllers cannot
+    /// overlap; local non-Mihomo cores are also hard-switched. Local Mihomo
+    /// reports `PatchFailed` until graceful overlap preparation is migrated.
+    pub async fn restart(&self) -> Result<SwitchOutcome, Error> {
+        let _operation = self.inner.operation.lock().await;
+        let (spec, reason) = {
+            let ctrl = self.inner.ctrl.lock().await;
+            let active = ctrl.current.as_ref().ok_or(Error::NotStarted)?;
+            (active.source_spec.clone(), hard_restart_reason(active))
+        };
+        self.stop_inner().await?;
+        self.start_inner(spec).await?;
+        Ok(SwitchOutcome::Hard { reason })
     }
 
     /// Validate a config with the selected core binary without changing the
@@ -377,6 +403,16 @@ impl Inner {
             status.controller = controller.clone();
             status.revision = revision.clone();
         });
+    }
+}
+
+fn hard_restart_reason(active: &Active) -> DegradeReason {
+    match &active.instance.controller().host {
+        clash_api::Host::Http(_) => DegradeReason::HttpController,
+        _ if !matches!(active.source_spec.core.kind, crate::CoreKind::Mihomo) => {
+            DegradeReason::UnsupportedKind
+        }
+        _ => DegradeReason::PatchFailed,
     }
 }
 

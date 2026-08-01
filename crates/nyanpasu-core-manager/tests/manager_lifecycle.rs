@@ -2,8 +2,8 @@ use std::time::Duration;
 
 use camino::Utf8PathBuf;
 use nyanpasu_core_manager::{
-    CoreKind, CoreManager, CoreSpec, CoreState, Error, InstanceOptions, InstanceSpec,
-    ManagerOptions, StopReason,
+    CoreKind, CoreManager, CoreSpec, CoreState, DegradeReason, Error, InstanceOptions,
+    InstanceSpec, ManagerOptions, StopReason, SwitchOutcome,
 };
 
 fn free_controller_address() -> String {
@@ -65,6 +65,18 @@ async fn managed_epoch_runs_from_preflight_through_cleanup() {
         Err(Error::AlreadyRunning)
     ));
 
+    assert_eq!(
+        manager.restart().await.unwrap(),
+        SwitchOutcome::Hard {
+            reason: DegradeReason::HttpController
+        }
+    );
+    let restarted = manager.status();
+    assert!(matches!(restarted.state, CoreState::Running { epoch: 2, .. }));
+    let restarted_revision = restarted.revision.expect("restarted revision");
+    assert!(restarted_revision.runtime_path.exists());
+    assert!(!revision.runtime_path.exists());
+
     manager.stop().await.unwrap();
     let stopped = manager.status();
     assert!(matches!(
@@ -73,6 +85,6 @@ async fn managed_epoch_runs_from_preflight_through_cleanup() {
             reason: Some(StopReason::User)
         }
     ));
-    assert!(!revision.runtime_path.exists());
+    assert!(!restarted_revision.runtime_path.exists());
     assert!(matches!(manager.stop().await, Err(Error::NotStarted)));
 }
