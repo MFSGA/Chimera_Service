@@ -210,3 +210,66 @@ fn probe_address(address: &str) -> String {
         _ => address.to_owned(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn snapshot(raw: &str) -> ConfigSnapshot {
+        ConfigSnapshot::from_bytes("source.yaml".into(), raw.as_bytes()).unwrap()
+    }
+
+    #[test]
+    fn canonical_hash_ignores_mapping_order() {
+        let first = snapshot("secret: token\nexternal-controller: 127.0.0.1:9090\n");
+        let second = snapshot("external-controller: 127.0.0.1:9090\nsecret: token\n");
+        let runtime = EnumSet::new();
+        let first = first
+            .prepare(None, Utf8Path::new("runtime"), 1, runtime)
+            .unwrap();
+        let second = second
+            .prepare(None, Utf8Path::new("runtime"), 1, runtime)
+            .unwrap();
+        assert_eq!(first.source_hash, second.source_hash);
+        assert_eq!(first.effective_hash, second.effective_hash);
+        assert_eq!(first.bytes, second.bytes);
+    }
+
+    #[test]
+    fn wildcard_http_controller_is_probed_through_loopback() {
+        let prepared = snapshot("external-controller: 0.0.0.0:9090\n")
+            .prepare(None, Utf8Path::new("runtime"), 2, EnumSet::new())
+            .unwrap();
+        let clash_api::Host::Http(url) = prepared.controller.host else {
+            panic!("expected HTTP controller");
+        };
+        assert_eq!(url.as_str(), "http://127.0.0.1:9090/");
+    }
+
+    #[test]
+    fn managed_controller_is_epoch_scoped_and_replaces_http() {
+        let runtime = EnumSet::only(RuntimeFeature::LocalIpc);
+        let prepared = snapshot("external-controller: 127.0.0.1:9090\nsecret: token\n")
+            .prepare(
+                Some("managed-{epoch}.sock"),
+                Utf8Path::new("runtime"),
+                7,
+                runtime,
+            )
+            .unwrap();
+        let text = String::from_utf8(prepared.bytes).unwrap();
+        assert!(!text.contains("external-controller: 127.0.0.1:9090"));
+        assert!(text.contains("managed-7.sock"));
+        assert_eq!(prepared.controller.secret.as_deref(), Some("token"));
+        #[cfg(windows)]
+        assert!(matches!(prepared.controller.host, clash_api::Host::NamedPipe(_)));
+        #[cfg(not(windows))]
+        assert!(matches!(prepared.controller.host, clash_api::Host::UnixSocket(_)));
+    }
+
+    #[test]
+    fn source_path_is_retained_for_revision_identity() {
+        let snapshot = snapshot("external-controller: 127.0.0.1:9090\n");
+        assert_eq!(snapshot.source_path(), Utf8Path::new("source.yaml"));
+    }
+}
