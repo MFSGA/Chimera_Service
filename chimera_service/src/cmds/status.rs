@@ -15,6 +15,10 @@ pub struct StatusCommand {
     /// Skip the service check
     #[clap(long, default_value = "false")]
     skip_service_check: bool,
+
+    /// Report running/stopped/not-installed through the process exit code
+    #[clap(long, default_value = "false")]
+    exit_code: bool,
 }
 
 // TODO: impl the health check if service is running
@@ -68,6 +72,17 @@ pub async fn status(ctx: StatusCommand) -> Result<(), CommandError> {
         );
     } else {
         println!("{info:#?}");
+    }
+    if ctx.exit_code {
+        return match info.status {
+            chimera_ipc::types::ServiceStatus::Running => Ok(()),
+            chimera_ipc::types::ServiceStatus::Stopped => {
+                Err(CommandError::ServiceAlreadyStopped)
+            }
+            chimera_ipc::types::ServiceStatus::NotInstalled => {
+                Err(CommandError::ServiceNotInstalled)
+            }
+        };
     }
     Ok(())
 }

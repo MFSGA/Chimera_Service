@@ -220,3 +220,146 @@ pub fn print_version() {
     println!("╰{:─^width$}╯", "", width = header_width);
     std::process::exit(0);
 }
+
+#[cfg(test)]
+mod tests {
+    use clap::{CommandFactory, Parser};
+
+    use super::*;
+
+    const LEGACY_INVOCATIONS: &[&[&str]] = &[
+        &[
+            "chimera-service",
+            "install",
+            "--user",
+            "alice",
+            "--nyanpasu-data-dir",
+            "data",
+            "--nyanpasu-config-dir",
+            "config",
+            "--nyanpasu-app-dir",
+            "app",
+        ],
+        &["chimera-service", "uninstall"],
+        &["chimera-service", "start"],
+        &["chimera-service", "stop"],
+        &["chimera-service", "restart"],
+        &[
+            "chimera-service",
+            "server",
+            "--nyanpasu-config-dir",
+            "config",
+            "--nyanpasu-data-dir",
+            "data",
+            "--nyanpasu-app-dir",
+            "app",
+        ],
+        &["chimera-service", "status"],
+        &["chimera-service", "status", "--json"],
+        &["chimera-service", "status", "--skip-service-check"],
+        &[
+            "chimera-service",
+            "rpc",
+            "start-core",
+            "--core-type",
+            r#"{"clash":"mihomo"}"#,
+            "--config-file",
+            "config.yaml",
+        ],
+        &["chimera-service", "rpc", "stop-core"],
+        &["chimera-service", "rpc", "restart-core"],
+        &["chimera-service", "rpc", "inspect-logs"],
+        &["chimera-service", "rpc", "retrieve-logs"],
+        &["chimera-service", "rpc", "set-dns"],
+        &["chimera-service", "-V"],
+        &["chimera-service", "-v"],
+    ];
+
+    const NEW_INVOCATIONS: &[&[&str]] = &[
+        &["chimera-service", "status", "--exit-code"],
+        &["chimera-service", "update", "--check"],
+        &["chimera-service", "update", "--from", "candidate.exe"],
+        &["chimera-service", "completions", "bash"],
+        &[
+            "chimera-service",
+            "rpc",
+            "start-core",
+            "--core-type",
+            "mihomo",
+            "--config-file",
+            "config.yaml",
+        ],
+        &[
+            "chimera-service",
+            "rpc",
+            "check-config",
+            "--core-type",
+            "clash-rs",
+            "--config-file",
+            "config.yaml",
+        ],
+        &[
+            "chimera-service",
+            "rpc",
+            "apply-config",
+            "--core-type",
+            "mihomo",
+            "--config-file",
+            "config.yaml",
+            "--expected-revision",
+            "3:7:fedcba9876543210",
+        ],
+        &["chimera-service", "rpc", "recover-core"],
+    ];
+
+    #[test]
+    fn cli_definition_is_consistent() {
+        Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn legacy_invocations_still_parse() {
+        for argv in LEGACY_INVOCATIONS {
+            Cli::try_parse_from(*argv)
+                .unwrap_or_else(|error| panic!("{argv:?} no longer parses:\n{error}"));
+        }
+    }
+
+    #[test]
+    fn new_invocations_parse() {
+        for argv in NEW_INVOCATIONS {
+            Cli::try_parse_from(*argv)
+                .unwrap_or_else(|error| panic!("{argv:?} does not parse:\n{error}"));
+        }
+    }
+
+    #[test]
+    fn bare_invocation_displays_help() {
+        let error = Cli::try_parse_from(["chimera-service"])
+            .err()
+            .expect("bare invocation must display help");
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+        );
+    }
+
+    #[test]
+    fn only_read_only_update_skips_elevation() {
+        let check = Cli::try_parse_from(["chimera-service", "update", "--check"]).unwrap();
+        let apply = Cli::try_parse_from(["chimera-service", "update"]).unwrap();
+        assert!(is_unprivileged(&check.command));
+        assert!(!is_unprivileged(&apply.command));
+    }
+
+    #[test]
+    fn completions_remains_hidden() {
+        let command = Cli::command();
+        assert!(
+            command
+                .find_subcommand("completions")
+                .expect("completions command")
+                .is_hide_set()
+        );
+    }
+}

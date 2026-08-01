@@ -9,16 +9,16 @@ use super::CommandError;
 #[derive(Debug, clap::Args)]
 pub struct InstallCommand {
     /// The user who will run the service
-    #[clap(long)]
+    #[clap(long, env = "NYANPASU_USER")]
     user: String,
     /// todo: rename The nyanpasu data directory
-    #[clap(long)]
+    #[clap(long, env = "NYANPASU_DATA_DIR")]
     nyanpasu_data_dir: PathBuf,
     /// todo: rename The nyanpasu config directory
-    #[clap(long)]
+    #[clap(long, env = "NYANPASU_CONFIG_DIR")]
     nyanpasu_config_dir: PathBuf,
     /// todo: rename The nyanpasu install directory, allowing to search the sidecar binary
-    #[clap(long)]
+    #[clap(long, env = "NYANPASU_APP_DIR")]
     nyanpasu_app_dir: PathBuf,
 }
 
