@@ -64,6 +64,7 @@ async fn managed_epoch_runs_from_preflight_through_cleanup() {
         manager.start(spec).await,
         Err(Error::AlreadyRunning)
     ));
+    assert!(manager.reconcile().await.unwrap().is_healthy());
 
     assert_eq!(
         manager.restart().await.unwrap(),

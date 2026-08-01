@@ -355,6 +355,14 @@ impl CoreManager {
         Ok(SwitchOutcome::Hard { reason })
     }
 
+    /// Run one serialized reconciliation probe against the active epoch.
+    pub async fn reconcile(&self) -> Result<crate::ProbeResult, Error> {
+        let _operation = self.inner.operation.lock().await;
+        let ctrl = self.inner.ctrl.lock().await;
+        let active = ctrl.current.as_ref().ok_or(Error::NotStarted)?;
+        Ok(active.instance.probe_now(crate::ProbePhase::Reconcile).await)
+    }
+
     /// Validate a config with the selected core binary without changing the
     /// manager's current state.
     pub async fn check_config(&self, spec: &crate::spec::InstanceSpec) -> Result<(), Error> {

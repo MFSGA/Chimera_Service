@@ -15,7 +15,7 @@ use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    ControllerVersionProbe, Error, ProbeHandle, ProbePhase,
+    ControllerVersionProbe, Error, ProbeHandle, ProbePhase, ProbeResult,
     health::{
         HealthTracker, TrackerState,
         driver::ProbeDriver,
@@ -39,6 +39,11 @@ struct Shared {
     cancel: CancellationToken,
     supervisor: tokio::sync::Mutex<Option<Supervisor>>,
     monitor: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
+    probe_request_tx: mpsc::UnboundedSender<ProbeRequest>,
+}
+
+struct ProbeRequest {
+    response: tokio::sync::oneshot::Sender<ProbeResult>,
 }
 
 pub struct InstanceBuilder {
@@ -114,12 +119,14 @@ impl Instance {
         let controller = Arc::new(controller);
         let cancel = parent.child_token();
         let (state_tx, state_rx) = watch::channel(InstanceStatus::initial());
+        let (probe_request_tx, probe_request_rx) = mpsc::unbounded_channel();
         let shared = Arc::new(Shared {
             state_tx,
             user_stop: AtomicBool::new(false),
             cancel: cancel.clone(),
             supervisor: tokio::sync::Mutex::new(None),
             monitor: tokio::sync::Mutex::new(None),
+            probe_request_tx,
         });
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let supervisor = Supervisor::builder({
@@ -153,6 +160,7 @@ impl Instance {
             readiness,
             liveness,
             spec.options.health.clone(),
+            probe_request_rx,
         ));
         *shared.monitor.lock().await = Some(monitor);
 
@@ -208,6 +216,29 @@ impl Instance {
 
     pub fn status(&self) -> InstanceStatus {
         self.state_rx.borrow().clone()
+    }
+
+    /// Request one serialized reconciliation probe for the active epoch.
+    pub async fn probe_now(&self, phase: ProbePhase) -> ProbeResult {
+        if phase != ProbePhase::Reconcile {
+            return ProbeResult::Unhealthy {
+                detail: Some("only reconciliation probes can be requested directly".into()),
+            };
+        }
+        let (response, result) = tokio::sync::oneshot::channel();
+        if self
+            .shared
+            .probe_request_tx
+            .send(ProbeRequest { response })
+            .is_err()
+        {
+            return ProbeResult::Unhealthy {
+                detail: Some("instance probe monitor is not running".into()),
+            };
+        }
+        result.await.unwrap_or_else(|_| ProbeResult::Unhealthy {
+            detail: Some("instance probe driver stopped".into()),
+        })
     }
 
     pub async fn stop(&self) -> Result<(), Error> {
@@ -286,6 +317,7 @@ async fn monitor_loop(
     readiness: ProbeHandle,
     liveness: Option<ProbeHandle>,
     policy: crate::HealthPolicy,
+    mut probe_requests: mpsc::UnboundedReceiver<ProbeRequest>,
 ) {
     let (observation_tx, mut observations) = mpsc::unbounded_channel();
     let mut driver: Option<ProbeDriver> = None;
@@ -344,6 +376,17 @@ async fn monitor_loop(
                 Some(SupervisorEvent::Exited(_)) => {}
                 Some(_) => {}
             },
+            request = probe_requests.recv() => {
+                let Some(request) = request else { continue };
+                match &driver {
+                    Some(driver) => driver.reconcile(request.response),
+                    None => {
+                        let _ = request.response.send(ProbeResult::Unhealthy {
+                            detail: Some("instance probe driver is not ready".into()),
+                        });
+                    }
+                }
+            }
             observation = observations.recv() => {
                 let Some(observation) = observation else { continue };
                 if observation.run_id != run_id || observation.pid != pid {
