@@ -1,6 +1,7 @@
 //! Cross-epoch orchestration and atomic status publication.
 
 use std::{
+    collections::BTreeSet,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -159,7 +160,7 @@ impl CoreManager {
             }
         }
         tokio::fs::create_dir_all(&runtime_dir).await?;
-        let max_epoch = discover_max_epoch(&runtime_dir).await?;
+        let max_epoch = sweep_orphans(&runtime_dir).await?;
         let (status_tx, _) = watch::channel(CoreStatus::initial());
         Ok(Self {
             inner: Arc::new(Inner {
@@ -601,8 +602,8 @@ fn map_instance_state(epoch: u64, state: &InstanceState) -> CoreState {
     }
 }
 
-async fn discover_max_epoch(runtime_dir: &camino::Utf8Path) -> Result<u64, Error> {
-    let mut maximum = 0_u64;
+async fn sweep_orphans(runtime_dir: &camino::Utf8Path) -> Result<u64, Error> {
+    let mut epochs = BTreeSet::new();
     let mut entries = tokio::fs::read_dir(runtime_dir).await?;
     while let Some(entry) = entries.next_entry().await? {
         let name = entry.file_name();
@@ -617,7 +618,29 @@ async fn discover_max_epoch(runtime_dir: &camino::Utf8Path) -> Result<u64, Error
                 .and_then(|value| value.strip_suffix(suffix))
                 .and_then(|value| value.parse::<u64>().ok())
             {
-                maximum = maximum.max(epoch);
+                epochs.insert(epoch);
+            }
+        }
+    }
+    let maximum = epochs.iter().next_back().copied().unwrap_or(0);
+    for epoch in epochs {
+        let pid_path = runtime_dir.join(format!("core-{epoch}.pid"));
+        if tokio::fs::try_exists(&pid_path).await? {
+            nyanpasu_utils::process::reap_epoch_pid_file(
+                pid_path.as_std_path(),
+                runtime_dir.as_std_path(),
+            )
+            .await?;
+        }
+        for path in [
+            runtime_dir.join(format!("config-{epoch}.yaml")),
+            pid_path,
+            runtime_dir.join(format!("core-{epoch}.sock")),
+        ] {
+            match tokio::fs::remove_file(path).await {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
             }
         }
     }
@@ -780,18 +803,52 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let root = camino::Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
         tokio::fs::write(root.join("config-7.yaml"), b"old").await.unwrap();
-        tokio::fs::write(root.join("core-9.pid"), b"old").await.unwrap();
+        tokio::fs::write(root.join("core-9.sock"), b"old").await.unwrap();
         tokio::fs::write(root.join("config-noise.yaml.tmp"), b"ignored")
             .await
             .unwrap();
 
         let manager = CoreManager::new(ManagerOptions {
-            runtime_dir: Some(root),
+            runtime_dir: Some(root.clone()),
             ..ManagerOptions::default()
         })
         .await
         .unwrap();
         assert_eq!(manager.inner.epoch.load(Ordering::SeqCst), 9);
+        assert!(!root.join("config-7.yaml").exists());
+        assert!(!root.join("core-9.sock").exists());
+        assert!(root.join("config-noise.yaml.tmp").exists());
+    }
+
+    #[tokio::test]
+    async fn construction_reaps_identity_recorded_orphans() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = camino::Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
+        let config = root.join("config-11.yaml");
+        let pid = root.join("core-11.pid");
+        tokio::fs::write(&config, b"old").await.unwrap();
+        nyanpasu_utils::process::publish_epoch_pid_file(
+            pid.as_std_path(),
+            &nyanpasu_utils::process::EpochPidRecord {
+                pid: u32::MAX - 1,
+                epoch: 11,
+                executable: "definitely-exited-core".into(),
+                start_token: 1,
+                runtime_config: config.as_std_path().to_path_buf(),
+            },
+        )
+        .await
+        .unwrap();
+
+        let manager = CoreManager::new(ManagerOptions {
+            runtime_dir: Some(root.clone()),
+            ..ManagerOptions::default()
+        })
+        .await
+        .unwrap();
+        assert_eq!(manager.inner.epoch.load(Ordering::SeqCst), 11);
+        assert!(!pid.exists());
+        assert!(!config.exists());
     }
 
     #[tokio::test]
