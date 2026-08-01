@@ -1,6 +1,5 @@
 pub mod consts;
 mod events;
-mod instance;
 mod logger;
 mod manager_bridge;
 mod manager_projection;
