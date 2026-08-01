@@ -1,5 +1,7 @@
 //! Cross-epoch orchestration and atomic status publication.
 
+mod quarantine;
+
 use std::{
     collections::BTreeSet,
     sync::{
@@ -22,6 +24,7 @@ use crate::{
         ConfigRevision, CoreState, CoreStatus, InstanceState, SpecSummary, StopReason, now_ms,
     },
 };
+use quarantine::reject_quarantine;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DegradeReason {
@@ -90,6 +93,14 @@ struct Inner {
 #[derive(Default)]
 struct Ctrl {
     current: Option<Active>,
+    quarantine: Vec<QuarantinedEpoch>,
+}
+
+#[derive(Debug, Clone)]
+struct QuarantinedEpoch {
+    epoch: u64,
+    reason: String,
+    death_proven: bool,
 }
 
 struct Active {
@@ -195,6 +206,7 @@ impl CoreManager {
 
     async fn start_inner(&self, spec: InstanceSpec) -> Result<(), Error> {
         let mut ctrl = self.inner.ctrl.lock().await;
+        reject_quarantine(&ctrl)?;
         if ctrl
             .current
             .as_ref()
@@ -203,8 +215,12 @@ impl CoreManager {
             return Err(Error::AlreadyRunning);
         }
         if let Some(stale) = ctrl.current.take() {
+            let epoch = stale.revision.epoch;
             abort_and_await(stale.forwarder).await;
-            let _ = stale.instance.stop().await;
+            if let Err(error) = stale.instance.stop().await {
+                self.latch_quarantine(&mut ctrl, epoch, &error);
+                return Err(error);
+            }
             cleanup_epoch(&stale.revision).await;
         }
 
@@ -335,6 +351,7 @@ impl CoreManager {
 
     async fn stop_inner(&self) -> Result<(), Error> {
         let mut ctrl = self.inner.ctrl.lock().await;
+        reject_quarantine(&ctrl)?;
         let Some(active) = ctrl.current.take() else {
             return Err(Error::NotStarted);
         };
@@ -344,7 +361,10 @@ impl CoreManager {
             status.state = CoreState::Stopping { epoch };
             status.changed_at = now_ms();
         });
-        active.instance.stop().await?;
+        if let Err(error) = active.instance.stop().await {
+            self.latch_quarantine(&mut ctrl, epoch, &error);
+            return Err(error);
+        }
         cleanup_epoch(&active.revision).await;
         self.inner.publish(
             CoreState::Stopped {
@@ -367,6 +387,7 @@ impl CoreManager {
         let _operation = self.inner.operation.lock().await;
         let (spec, reason) = {
             let ctrl = self.inner.ctrl.lock().await;
+            reject_quarantine(&ctrl)?;
             let active = ctrl.current.as_ref().ok_or(Error::NotStarted)?;
             (active.source_spec.clone(), hard_restart_reason(active))
         };
@@ -388,6 +409,7 @@ impl CoreManager {
         let _operation = self.inner.operation.lock().await;
         let (previous_spec, previous_revision) = {
             let ctrl = self.inner.ctrl.lock().await;
+            reject_quarantine(&ctrl)?;
             let active = ctrl.current.as_ref().ok_or(Error::NotStarted)?;
             if active.instance.status().state.is_terminal() {
                 return Err(Error::NotStarted);
@@ -472,6 +494,7 @@ impl CoreManager {
         let _operation = self.inner.operation.lock().await;
         let reason = {
             let ctrl = self.inner.ctrl.lock().await;
+            reject_quarantine(&ctrl)?;
             match ctrl.current.as_ref() {
                 Some(active) if !active.instance.status().state.is_terminal() => {
                     hard_switch_reason(active, &spec)
@@ -484,7 +507,7 @@ impl CoreManager {
         } else {
             let stale_exists = self.inner.ctrl.lock().await.current.is_some();
             if stale_exists {
-                let _ = self.stop_inner().await;
+                self.stop_inner().await?;
             }
         }
         self.start_inner(spec).await?;
@@ -495,6 +518,7 @@ impl CoreManager {
     pub async fn reconcile(&self) -> Result<crate::ProbeResult, Error> {
         let _operation = self.inner.operation.lock().await;
         let ctrl = self.inner.ctrl.lock().await;
+        reject_quarantine(&ctrl)?;
         let active = ctrl.current.as_ref().ok_or(Error::NotStarted)?;
         Ok(active.instance.probe_now(crate::ProbePhase::Reconcile).await)
     }

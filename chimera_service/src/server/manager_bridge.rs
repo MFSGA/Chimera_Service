@@ -176,9 +176,7 @@ impl CoreManagerService {
     }
 
     pub async fn recover(&self) -> Result<(), OperationError> {
-        // Quarantine is introduced with confirmed-death shutdown. Until that
-        // layer is migrated this operation is intentionally idempotent.
-        Ok(())
+        self.manager.recover_quarantine().await.map_err(Into::into)
     }
 
     pub async fn shutdown(&self) {
