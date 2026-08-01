@@ -1,14 +1,20 @@
 //! Cross-epoch orchestration and atomic status publication.
 
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 
 use tokio::sync::watch;
 
 use crate::{
-    Error, ProbeHandle,
+    Error, Feature, Instance, ProbeHandle, RuntimeFeature,
     capability::{ResolvedFeatures, VersionCache, resolve_features},
-    spec::{CoreSpec, ManagerOptions},
-    state::{ConfigRevision, CoreStatus},
+    config::ConfigSnapshot,
+    spec::{CoreSpec, InstanceSpec, ManagerOptions},
+    state::{
+        ConfigRevision, CoreState, CoreStatus, InstanceState, SpecSummary, StopReason, now_ms,
+    },
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,6 +75,22 @@ struct Inner {
     probes: ProbePlan,
     status_tx: watch::Sender<CoreStatus>,
     version_cache: VersionCache,
+    ctrl: tokio::sync::Mutex<Ctrl>,
+    epoch: AtomicU64,
+}
+
+#[derive(Default)]
+struct Ctrl {
+    current: Option<Active>,
+}
+
+struct Active {
+    instance: Instance,
+    forwarder: tokio::task::JoinHandle<()>,
+    source_spec: InstanceSpec,
+    revision: ConfigRevision,
+    capabilities: Vec<Feature>,
+    runtime_features: Vec<RuntimeFeature>,
 }
 
 impl CoreManagerBuilder {
@@ -138,6 +160,8 @@ impl CoreManager {
                 probes,
                 status_tx,
                 version_cache: VersionCache::default(),
+                ctrl: tokio::sync::Mutex::new(Ctrl::default()),
+                epoch: AtomicU64::new(0),
             }),
         })
     }
@@ -148,6 +172,161 @@ impl CoreManager {
 
     pub fn status(&self) -> CoreStatus {
         self.inner.status_tx.borrow().clone()
+    }
+
+    pub async fn start(&self, spec: InstanceSpec) -> Result<(), Error> {
+        let mut ctrl = self.inner.ctrl.lock().await;
+        if ctrl
+            .current
+            .as_ref()
+            .is_some_and(|active| !active.instance.status().state.is_terminal())
+        {
+            return Err(Error::AlreadyRunning);
+        }
+        if let Some(stale) = ctrl.current.take() {
+            stale.forwarder.abort();
+            let _ = stale.instance.stop().await;
+            cleanup_epoch(&stale.revision).await;
+        }
+
+        let epoch = self.inner.epoch.fetch_add(1, Ordering::SeqCst) + 1;
+        let resolved = self.resolve_core_features(&spec.core).await?;
+        let runtime_dir = self
+            .inner
+            .options
+            .runtime_dir
+            .as_ref()
+            .expect("validated runtime directory");
+        tokio::fs::create_dir_all(runtime_dir).await?;
+        let snapshot = ConfigSnapshot::load(&spec.config_path).await?;
+        let prepared = snapshot.prepare(
+            self.inner.options.controller_template.as_deref(),
+            runtime_dir,
+            epoch,
+            resolved.runtime,
+        )?;
+        let runtime_path = runtime_dir.join(format!("config-{epoch}.yaml"));
+        tokio::fs::write(&runtime_path, &prepared.bytes).await?;
+
+        let mut effective_spec = spec.clone();
+        effective_spec.config_path = runtime_path.clone();
+        effective_spec.pid_file = Some(runtime_dir.join(format!("core-{epoch}.pid")));
+        if effective_spec.core.version.is_none() {
+            effective_spec.core.version = resolved.version.clone();
+        }
+        let revision = ConfigRevision {
+            epoch,
+            generation: 1,
+            source_hash: prepared.source_hash,
+            effective_hash: prepared.effective_hash,
+            runtime_path,
+        };
+        let capabilities: Vec<_> = resolved.capabilities.iter().collect();
+        let runtime_features: Vec<_> = resolved.runtime.iter().collect();
+        let summary = SpecSummary {
+            kind: spec.core.kind,
+            config_path: spec.config_path.clone(),
+            capabilities: capabilities.clone(),
+            runtime_features: runtime_features.clone(),
+        };
+
+        crate::kind::check_config(&effective_spec).await.map_err(|error| {
+            self.inner.publish(
+                CoreState::Stopped {
+                    reason: Some(StopReason::Error(error.to_string())),
+                },
+                None,
+                None,
+                None,
+                None,
+            );
+            error
+        })?;
+        self.inner.publish(
+            CoreState::Starting { epoch },
+            None,
+            Some(summary),
+            Some(prepared.controller.host.clone()),
+            Some(revision.clone()),
+        );
+
+        let mut builder = Instance::builder(
+            effective_spec,
+            epoch,
+            prepared.controller,
+            self.inner.options.cancel_token.clone(),
+        );
+        if let Some(probe) = self.inner.probes.readiness.clone() {
+            builder = builder.readiness_probe(probe);
+        }
+        if let Some(probe) = self.inner.probes.liveness.clone() {
+            builder = builder.liveness_probe(probe);
+        } else if self.inner.probes.liveness_with_readiness {
+            builder = builder.liveness_with_readiness_probe();
+        }
+        let instance = builder.spawn().await.map_err(|error| {
+            self.inner.publish(
+                CoreState::Stopped {
+                    reason: Some(StopReason::Error(error.to_string())),
+                },
+                None,
+                None,
+                None,
+                None,
+            );
+            error
+        })?;
+        let pid = match instance.status().state {
+            InstanceState::Running { pid } => pid,
+            _ => 0,
+        };
+        self.inner.publish(
+            CoreState::Running { epoch, pid },
+            instance.status().health,
+            Some(SpecSummary {
+                kind: spec.core.kind,
+                config_path: spec.config_path.clone(),
+                capabilities: capabilities.clone(),
+                runtime_features: runtime_features.clone(),
+            }),
+            Some(instance.controller().host.clone()),
+            Some(revision.clone()),
+        );
+        let forwarder = spawn_forwarder(self.inner.clone(), instance.subscribe(), epoch);
+        ctrl.current = Some(Active {
+            instance,
+            forwarder,
+            source_spec: spec,
+            revision,
+            capabilities,
+            runtime_features,
+        });
+        Ok(())
+    }
+
+    pub async fn stop(&self) -> Result<(), Error> {
+        let mut ctrl = self.inner.ctrl.lock().await;
+        let Some(active) = ctrl.current.take() else {
+            return Err(Error::NotStarted);
+        };
+        let epoch = active.instance.epoch();
+        active.forwarder.abort();
+        self.inner.status_tx.send_modify(|status| {
+            status.state = CoreState::Stopping { epoch };
+            status.changed_at = now_ms();
+        });
+        active.instance.stop().await?;
+        cleanup_epoch(&active.revision).await;
+        self.inner.publish(
+            CoreState::Stopped {
+                reason: Some(StopReason::User),
+            },
+            None,
+            None,
+            None,
+            None,
+        );
+        Ok(())
     }
 
     /// Validate a config with the selected core binary without changing the
@@ -178,6 +357,67 @@ impl CoreManager {
 
     pub fn has_custom_liveness_probe(&self) -> bool {
         self.inner.probes.liveness.is_some() || self.inner.probes.liveness_with_readiness
+    }
+}
+
+impl Inner {
+    fn publish(
+        &self,
+        state: CoreState,
+        health: Option<crate::HealthStatus>,
+        spec: Option<SpecSummary>,
+        controller: Option<clash_api::Host>,
+        revision: Option<ConfigRevision>,
+    ) {
+        self.status_tx.send_modify(|status| {
+            status.state = state.clone();
+            status.changed_at = now_ms();
+            status.health = health.clone();
+            status.spec = spec.clone();
+            status.controller = controller.clone();
+            status.revision = revision.clone();
+        });
+    }
+}
+
+fn spawn_forwarder(
+    inner: Arc<Inner>,
+    mut states: watch::Receiver<crate::InstanceStatus>,
+    epoch: u64,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        while states.changed().await.is_ok() {
+            let instance = states.borrow_and_update().clone();
+            inner.status_tx.send_modify(|status| {
+                status.state = map_instance_state(epoch, &instance.state);
+                status.changed_at = now_ms();
+                status.health = instance.health.clone();
+            });
+        }
+    })
+}
+
+fn map_instance_state(epoch: u64, state: &InstanceState) -> CoreState {
+    match state {
+        InstanceState::Starting => CoreState::Starting { epoch },
+        InstanceState::Running { pid } => CoreState::Running { epoch, pid: *pid },
+        InstanceState::Restarting { attempt } => CoreState::Restarting {
+            epoch,
+            attempt: *attempt,
+        },
+        InstanceState::Stopping => CoreState::Stopping { epoch },
+        InstanceState::Stopped(reason) => CoreState::Stopped {
+            reason: Some(reason.clone()),
+        },
+    }
+}
+
+async fn cleanup_epoch(revision: &ConfigRevision) {
+    let _ = tokio::fs::remove_file(&revision.runtime_path).await;
+    if let Some(parent) = revision.runtime_path.parent() {
+        let _ = tokio::fs::remove_file(parent.join(format!("core-{}.pid", revision.epoch))).await;
+        #[cfg(not(windows))]
+        let _ = tokio::fs::remove_file(parent.join(format!("core-{}.sock", revision.epoch))).await;
     }
 }
 
