@@ -228,3 +228,208 @@ impl Drop for Instance {
         self.shared.cancel.cancel();
     }
 }
+
+impl InstanceBuilder {
+    pub fn readiness_probe(mut self, probe: ProbeHandle) -> Self {
+        self.readiness_probe = Some(probe);
+        self
+    }
+
+    pub fn liveness_probe(mut self, probe: ProbeHandle) -> Self {
+        self.liveness_probe = Some(probe);
+        self.liveness_with_readiness = false;
+        self
+    }
+
+    pub fn liveness_with_readiness_probe(mut self) -> Self {
+        self.liveness_probe = None;
+        self.liveness_with_readiness = true;
+        self
+    }
+
+    pub async fn spawn(self) -> Result<Instance, Error> {
+        Instance::spawn_configured(self).await
+    }
+}
+
+fn build_command(spec: &InstanceSpec, epoch: u64, controller: &ResolvedController) -> Command {
+    let config_dir = spec.config_path.parent().unwrap_or(&spec.working_dir);
+    let mut command = Command::new(spec.core.binary_path.as_str())
+        .args(kind::run_args(
+            spec.core.kind,
+            &spec.working_dir,
+            &spec.config_path,
+        ))
+        .args(kind::controller_args(spec.core.kind, &controller.host))
+        .current_dir(spec.working_dir.as_std_path())
+        .env(
+            MIHOMO_SAFE_PATHS_ENV_NAME,
+            kind::mihomo_safe_paths(&spec.working_dir, config_dir),
+        )
+        .env(CLICOLOR_FORCE_ENV_NAME, "0");
+    if let Some(pid_file) = &spec.pid_file {
+        command = command.epoch_pid_file(EpochPidFile::new(
+            pid_file.as_std_path(),
+            epoch,
+            spec.config_path.as_std_path(),
+        ));
+    }
+    command
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn monitor_loop(
+    mut events: mpsc::UnboundedReceiver<SupervisorEvent>,
+    shared: Arc<Shared>,
+    epoch: u64,
+    controller: Arc<ResolvedController>,
+    readiness: ProbeHandle,
+    liveness: Option<ProbeHandle>,
+    policy: crate::HealthPolicy,
+) {
+    let (observation_tx, mut observations) = mpsc::unbounded_channel();
+    let mut driver: Option<ProbeDriver> = None;
+    let mut tracker: Option<HealthTracker> = None;
+    let mut run_id = 0_u64;
+    let mut pid = 0_u32;
+
+    loop {
+        tokio::select! {
+            biased;
+            _ = shared.cancel.cancelled() => break,
+            event = events.recv() => match event {
+                Some(SupervisorEvent::Started { pid: started_pid }) => {
+                    if let Some(old) = driver.take() {
+                        old.stop().await;
+                    }
+                    run_id = run_id.saturating_add(1);
+                    pid = started_pid;
+                    tracker = Some(HealthTracker::new(policy.clone(), std::time::Instant::now()));
+                    shared.publish(InstanceState::Starting, Some(HealthStatus::starting()));
+                    driver = Some(ProbeDriver::start(
+                        epoch,
+                        run_id,
+                        pid,
+                        controller.clone(),
+                        readiness.clone(),
+                        liveness.clone(),
+                        policy.clone(),
+                        observation_tx.clone(),
+                    ));
+                }
+                Some(SupervisorEvent::Ready) => {
+                    shared.publish_state(InstanceState::Running { pid });
+                    if let Some(driver) = &driver {
+                        driver.use_liveness();
+                    }
+                }
+                Some(SupervisorEvent::Restarting { attempt, .. }) => {
+                    shared.publish_state(InstanceState::Restarting { attempt });
+                }
+                Some(SupervisorEvent::GaveUp) => {
+                    shared.publish(InstanceState::Stopped(StopReason::Error(
+                        "restart policy exhausted".into(),
+                    )), None);
+                    break;
+                }
+                Some(SupervisorEvent::Stopped) | None => {
+                    let reason = if shared.user_stop.load(Ordering::SeqCst) {
+                        StopReason::User
+                    } else {
+                        StopReason::Finished
+                    };
+                    shared.publish(InstanceState::Stopped(reason), None);
+                    break;
+                }
+                Some(SupervisorEvent::Exited(_)) => {}
+            },
+            observation = observations.recv() => {
+                let Some(observation) = observation else { continue };
+                if observation.run_id != run_id || observation.pid != pid {
+                    continue;
+                }
+                let Some(tracker) = tracker.as_mut() else { continue };
+                let update = tracker.observe(observation.completed_at, &observation.result);
+                shared.publish_health(update, observation.completed_at_ms);
+                if observation.phase == ProbePhase::Readiness
+                    && update.state == TrackerState::Healthy
+                    && let Some(supervisor) = shared.supervisor.lock().await.as_ref()
+                {
+                    let _ = supervisor.acknowledge_ready(pid).await;
+                }
+            }
+        }
+    }
+    if let Some(driver) = driver {
+        driver.stop().await;
+    }
+}
+
+impl Shared {
+    fn publish_state(&self, state: InstanceState) {
+        self.state_tx.send_modify(|status| status.state = state.clone());
+    }
+
+    fn publish(&self, state: InstanceState, health: Option<HealthStatus>) {
+        self.state_tx.send_modify(|status| {
+            status.state = state.clone();
+            status.health = health.clone();
+        });
+    }
+
+    fn publish_health(&self, update: crate::health::TrackerUpdate, observed_at: i64) {
+        self.state_tx.send_modify(|status| {
+            let previous = status.health.as_ref();
+            let state = match update.state {
+                TrackerState::Starting => HealthState::Starting,
+                TrackerState::Healthy => HealthState::Healthy,
+                TrackerState::Unhealthy => HealthState::Unhealthy,
+            };
+            status.health = Some(HealthStatus {
+                state,
+                changed_at: if update.transitioned {
+                    observed_at
+                } else {
+                    previous.map_or(observed_at, |health| health.changed_at)
+                },
+                consecutive_failures: update.consecutive_failures,
+                last_error: update.last_error,
+                last_success_at: if state == HealthState::Healthy {
+                    Some(observed_at)
+                } else {
+                    previous.and_then(|health| health.last_success_at)
+                },
+            });
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{CoreSpec, InstanceOptions, kind::CoreKind};
+
+    #[tokio::test]
+    async fn missing_artifacts_fail_before_spawning() {
+        let spec = InstanceSpec {
+            core: CoreSpec {
+                kind: CoreKind::Mihomo,
+                binary_path: "definitely-missing-core".into(),
+                version: Some("1.18.9".into()),
+                features: Vec::new(),
+            },
+            config_path: "definitely-missing-config.yaml".into(),
+            working_dir: ".".into(),
+            pid_file: None,
+            options: InstanceOptions::default(),
+        };
+        let controller = ResolvedController {
+            host: clash_api::Host::http("127.0.0.1:1").unwrap(),
+            secret: None,
+        };
+        assert!(matches!(
+            Instance::spawn(spec, 1, controller, CancellationToken::new()).await,
+            Err(Error::ConfigNotFound(_))
+        ));
+    }
+}
