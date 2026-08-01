@@ -8,6 +8,8 @@ use url::Url;
 
 use crate::{Error, Result};
 
+const LOCAL_TRANSPORT_BASE_URL: &str = "http://localhost/";
+
 /// The transport used to connect to the Mihomo external controller.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -85,6 +87,7 @@ impl std::fmt::Debug for Secret {
 pub struct Client {
     client: reqwest::Client,
     host: Host,
+    base_url: Url,
     secret: Secret,
 }
 
@@ -112,15 +115,7 @@ impl Client {
     }
 
     pub fn base_url(&self) -> Result<&Url> {
-        match &self.host {
-            Host::Http(url) => Ok(url),
-            Host::NamedPipe(_) => Err(Error::UnsupportedTransport {
-                transport: "named pipe",
-            }),
-            Host::UnixSocket(_) => Err(Error::UnsupportedTransport {
-                transport: "unix socket",
-            }),
-        }
+        Ok(&self.base_url)
     }
 
     pub(crate) fn request(&self, method: Method, endpoint: &str) -> Result<reqwest::RequestBuilder> {
@@ -133,7 +128,7 @@ impl Client {
                 source,
             })?;
         let mut request = self.client.request(method, url);
-        if !self.secret.is_empty() {
+        if matches!(&self.host, Host::Http(_)) && !self.secret.is_empty() {
             let mut value = HeaderValue::from_str(&format!("Bearer {}", self.secret.as_str()))
                 .map_err(Error::InvalidSecret)?;
             value.set_sensitive(true);
@@ -187,14 +182,57 @@ impl ClientBuilder {
     }
 
     pub fn build(self) -> Result<Client> {
-        let client = reqwest::Client::builder()
-            .timeout(self.timeout)
-            .build()
-            .map_err(Error::BuildClient)?;
+        let mut builder = reqwest::Client::builder().timeout(self.timeout);
+        let (host, base_url, secret) = match self.host {
+            Host::Http(base_url) => {
+                let base_url = normalize_base_url(base_url)?;
+                (Host::Http(base_url.clone()), base_url, self.secret)
+            }
+            Host::NamedPipe(path) => {
+                #[cfg(windows)]
+                {
+                    builder = builder.windows_named_pipe(path.as_path());
+                    (
+                        Host::NamedPipe(path),
+                        Url::parse(LOCAL_TRANSPORT_BASE_URL)
+                            .expect("valid local transport base URL"),
+                        Secret::default(),
+                    )
+                }
+                #[cfg(not(windows))]
+                {
+                    let _ = (path, builder);
+                    return Err(Error::UnsupportedTransport {
+                        transport: "Windows named pipe",
+                    });
+                }
+            }
+            Host::UnixSocket(path) => {
+                #[cfg(unix)]
+                {
+                    builder = builder.unix_socket(path.as_path());
+                    (
+                        Host::UnixSocket(path),
+                        Url::parse(LOCAL_TRANSPORT_BASE_URL)
+                            .expect("valid local transport base URL"),
+                        Secret::default(),
+                    )
+                }
+                #[cfg(not(unix))]
+                {
+                    let _ = (path, builder);
+                    return Err(Error::UnsupportedTransport {
+                        transport: "Unix domain socket",
+                    });
+                }
+            }
+        };
+        let client = builder.build().map_err(Error::BuildClient)?;
         Ok(Client {
             client,
-            host: self.host,
-            secret: self.secret,
+            host,
+            base_url,
+            secret,
         })
     }
 }
@@ -300,14 +338,29 @@ mod tests {
         server.await.unwrap();
     }
 
+    #[cfg(windows)]
     #[test]
-    fn local_transport_reports_an_explicit_capability_gap() {
-        let client = Client::builder(Host::unix_socket("/tmp/controller.sock"))
+    fn named_pipe_uses_the_synthetic_url_without_auth() {
+        let client = Client::builder(Host::named_pipe(r"\\.\pipe\controller"))
+            .secret("ignored")
             .build()
             .unwrap();
-        assert!(matches!(
-            client.base_url(),
-            Err(Error::UnsupportedTransport { transport: "unix socket" })
-        ));
+        assert_eq!(client.base_url().unwrap().as_str(), LOCAL_TRANSPORT_BASE_URL);
+        let request = client.request(Method::GET, "/version").unwrap().build().unwrap();
+        assert_eq!(request.url().as_str(), "http://localhost/version");
+        assert!(!request.headers().contains_key(AUTHORIZATION));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_socket_uses_the_synthetic_url_without_auth() {
+        let client = Client::builder(Host::unix_socket("/tmp/controller.sock"))
+            .secret("ignored")
+            .build()
+            .unwrap();
+        assert_eq!(client.base_url().unwrap().as_str(), LOCAL_TRANSPORT_BASE_URL);
+        let request = client.request(Method::GET, "/version").unwrap().build().unwrap();
+        assert_eq!(request.url().as_str(), "http://localhost/version");
+        assert!(!request.headers().contains_key(AUTHORIZATION));
     }
 }
