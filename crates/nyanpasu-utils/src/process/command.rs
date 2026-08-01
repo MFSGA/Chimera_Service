@@ -4,6 +4,8 @@ use std::{
     time::Duration,
 };
 
+use super::pid_file::EpochPidFile;
+
 /// Builder for spawning a managed child process.
 pub struct Command {
     pub(crate) program: OsString,
@@ -16,6 +18,7 @@ pub struct Command {
     pub(crate) event_channel_capacity: usize,
     pub(crate) timeout: Option<Duration>,
     pub(crate) pipe_stdin: bool,
+    pub(crate) epoch_pid_file: Option<EpochPidFile>,
 }
 
 impl Command {
@@ -31,6 +34,7 @@ impl Command {
             event_channel_capacity: 64,
             timeout: None,
             pipe_stdin: false,
+            epoch_pid_file: None,
         }
     }
 
@@ -92,6 +96,12 @@ impl Command {
         self
     }
 
+    /// Publish an identity-bound PID record for this process epoch.
+    pub fn epoch_pid_file(mut self, spec: EpochPidFile) -> Self {
+        self.epoch_pid_file = Some(spec);
+        self
+    }
+
     /// Spawn a long-running child and stream its events.
     pub async fn spawn(
         self,
@@ -131,6 +141,7 @@ mod tests {
         assert!(!command.pipe_stdin);
         assert!(command.encoding.is_none());
         assert!(command.timeout.is_none());
+        assert!(command.epoch_pid_file.is_none());
     }
 
     #[test]
@@ -143,12 +154,14 @@ mod tests {
             .kill_grace(Duration::from_secs(1))
             .event_channel_capacity(8)
             .timeout(Duration::from_secs(3))
+            .epoch_pid_file(EpochPidFile::new("core-1.pid", 1, "config-1.yaml"))
             .pipe_stdin(true)
             .hide_window(false);
         assert_eq!(command.args.len(), 3);
         assert_eq!(command.envs.len(), 1);
         assert_eq!(command.event_channel_capacity, 8);
         assert_eq!(command.timeout, Some(Duration::from_secs(3)));
+        assert_eq!(command.epoch_pid_file.as_ref().unwrap().epoch(), 1);
         assert!(command.pipe_stdin);
         assert!(!command.hide_window);
     }

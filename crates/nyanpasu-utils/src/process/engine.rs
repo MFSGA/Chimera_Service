@@ -10,6 +10,10 @@ use super::{
     error::{ProcessError, ProcessOutput},
     event::{ProcessEvent, TerminatedPayload},
     handle::{Containment, Ctrl},
+    pid_file::{
+        EpochPidFile, EpochPidRecord, inspect_process_identity, publish_epoch_pid_file,
+        reap_epoch_pid_file, remove_epoch_pid_file_if_matches,
+    },
 };
 
 #[cfg(windows)]
@@ -26,6 +30,14 @@ pub(crate) struct SpawnParts {
 
 pub(crate) async fn spawn(command: Command) -> Result<SpawnParts, ProcessError> {
     let program = command.program.to_string_lossy().into_owned();
+    let epoch_pid_file = command.epoch_pid_file.clone();
+    if let Some(spec) = &epoch_pid_file {
+        let runtime_dir = spec
+            .path()
+            .parent()
+            .ok_or_else(|| ProcessError::Engine("epoch pid file has no parent".into()))?;
+        reap_epoch_pid_file(spec.path(), runtime_dir).await?;
+    }
     let mut child = tokio::process::Command::new(&command.program);
     child
         .args(&command.args)
@@ -51,6 +63,17 @@ pub(crate) async fn spawn(command: Command) -> Result<SpawnParts, ProcessError> 
         message: error.to_string(),
     })?;
     let pid = child.id().ok_or_else(|| ProcessError::Engine("spawned child has no pid".into()))?;
+    let owned_pid_record = match epoch_pid_file {
+        Some(spec) => match publish_spawned_pid_record(pid, &spec).await {
+            Ok(record) => Some((spec.path().to_path_buf(), record)),
+            Err(error) => {
+                let _ = hard_kill_tree(pid).await;
+                let _ = child.wait().await;
+                return Err(error);
+            }
+        },
+        None => None,
+    };
     let stdout = child
         .stdout
         .take()
@@ -113,6 +136,15 @@ pub(crate) async fn spawn(command: Command) -> Result<SpawnParts, ProcessError> 
                             let _ = events_tx.send(ProcessEvent::Error(error.clone())).await;
                         }
                     }
+                    if let Some((path, record)) = &owned_pid_record {
+                        if let Err(error) = remove_epoch_pid_file_if_matches(path, record).await {
+                            let _ = events_tx
+                                .send(ProcessEvent::Error(format!(
+                                    "failed to remove epoch pid record: {error}"
+                                )))
+                                .await;
+                        }
+                    }
                     let _ = terminated_tx.send(Some(result));
                     break;
                 }
@@ -164,6 +196,24 @@ pub(crate) async fn spawn(command: Command) -> Result<SpawnParts, ProcessError> 
         terminated_rx,
         events_rx,
     })
+}
+
+async fn publish_spawned_pid_record(
+    pid: u32,
+    spec: &EpochPidFile,
+) -> Result<EpochPidRecord, ProcessError> {
+    let identity = inspect_process_identity(pid)
+        .await?
+        .ok_or_else(|| ProcessError::Engine(format!("spawned pid {pid} disappeared")))?;
+    let record = EpochPidRecord {
+        pid,
+        epoch: spec.epoch(),
+        executable: identity.executable,
+        start_token: identity.start_token,
+        runtime_config: spec.runtime_config().to_path_buf(),
+    };
+    publish_epoch_pid_file(spec.path(), &record).await?;
+    Ok(record)
 }
 
 async fn wait_until(deadline: Option<tokio::time::Instant>) {
