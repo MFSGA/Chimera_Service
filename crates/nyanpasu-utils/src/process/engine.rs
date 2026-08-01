@@ -289,3 +289,135 @@ fn decode(bytes: &[u8], encoding: Option<&'static encoding_rs::Encoding>) -> Str
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn captures_a_successful_command() {
+        let output = Command::new("rustc").arg("--version").output().await.unwrap();
+        assert!(output.success());
+        assert!(output.stdout.contains("rustc"));
+        assert!(output.stderr.is_empty());
+    }
+
+    #[tokio::test]
+    async fn spawn_failure_preserves_the_program_name() {
+        let error = Command::new("definitely-not-a-real-program")
+            .output()
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            ProcessError::Spawn { ref program, .. }
+                if program == "definitely-not-a-real-program"
+        ));
+    }
+
+    #[tokio::test]
+    async fn spawn_streams_output_before_the_terminal_event() {
+        let (handle, mut events) = Command::new("rustc")
+            .arg("--version")
+            .spawn()
+            .await
+            .unwrap();
+        let mut saw_version = false;
+        let mut saw_terminal = false;
+        while let Some(event) = events.recv().await {
+            match event {
+                ProcessEvent::Stdout(line) => saw_version |= line.contains("rustc"),
+                ProcessEvent::Terminated(payload) => {
+                    assert_eq!(payload.code, Some(0));
+                    saw_terminal = true;
+                }
+                _ => {}
+            }
+        }
+        assert!(saw_version);
+        assert!(saw_terminal);
+        assert_eq!(handle.wait().await.unwrap().code, Some(0));
+    }
+
+    #[cfg(windows)]
+    fn long_running_command() -> Command {
+        Command::new("powershell.exe").args([
+            "-NoProfile",
+            "-Command",
+            "[Console]::Out.WriteLine('ready'); [Console]::Out.Flush(); Start-Sleep -Seconds 30",
+        ])
+    }
+
+    #[cfg(unix)]
+    fn long_running_command() -> Command {
+        Command::new("sh").args(["-c", "echo ready; sleep 30"])
+    }
+
+    #[tokio::test]
+    async fn hard_kill_completes_wait() {
+        let (handle, mut events) = long_running_command().spawn().await.unwrap();
+        let ready = tokio::time::timeout(Duration::from_secs(5), async {
+            while let Some(event) = events.recv().await {
+                if matches!(event, ProcessEvent::Stdout(ref line) if line == "ready") {
+                    return true;
+                }
+            }
+            false
+        })
+        .await
+        .unwrap();
+        assert!(ready);
+        handle.kill().await.unwrap();
+        let terminated = tokio::time::timeout(Duration::from_secs(5), handle.wait())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_ne!(terminated.code, Some(0));
+    }
+
+    #[cfg(windows)]
+    fn stdin_echo_command() -> Command {
+        Command::new("powershell.exe").args([
+            "-NoProfile",
+            "-Command",
+            "$line = [Console]::In.ReadLine(); [Console]::Out.WriteLine($line)",
+        ])
+    }
+
+    #[cfg(unix)]
+    fn stdin_echo_command() -> Command {
+        Command::new("sh").args(["-c", "read line; printf '%s\\n' \"$line\""])
+    }
+
+    #[tokio::test]
+    async fn piped_stdin_is_written_and_flushed() {
+        let (handle, mut events) = stdin_echo_command()
+            .pipe_stdin(true)
+            .spawn()
+            .await
+            .unwrap();
+        handle.write_stdin(b"hello from stdin\n").await.unwrap();
+        let echoed = tokio::time::timeout(Duration::from_secs(5), async {
+            while let Some(event) = events.recv().await {
+                if let ProcessEvent::Stdout(line) = event {
+                    return line;
+                }
+            }
+            String::new()
+        })
+        .await
+        .unwrap();
+        assert_eq!(echoed, "hello from stdin");
+        assert_eq!(handle.wait().await.unwrap().code, Some(0));
+    }
+
+    #[tokio::test]
+    async fn one_shot_timeout_returns_a_typed_error() {
+        let timeout = Duration::from_millis(100);
+        let error = long_running_command()
+            .timeout(timeout)
+            .output()
+            .await
+            .unwrap_err();
+        assert!(matches!(error, ProcessError::Timeout { after } if after == timeout));
+    }
+}
