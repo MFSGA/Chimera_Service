@@ -1967,6 +1967,7 @@ dependencies = [
  "nyanpasu-core-metadata",
  "nyanpasu-utils",
  "serde_yaml_ng",
+ "tempfile",
  "thiserror 2.0.19",
  "tokio",
  "tokio-util",
