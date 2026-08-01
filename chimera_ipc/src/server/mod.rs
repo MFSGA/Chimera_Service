@@ -132,3 +132,31 @@ pub async fn create_server(
     };
     Ok(())
 }
+
+/// Mount operation handlers from the shared IPC contract.
+///
+/// The route method and path are taken from `IpcOperation`, so the server
+/// cannot drift from clients consuming the same contract.
+pub trait RegisterOperation<S> {
+    fn register<Op, H, T>(self, op: Op, handler: H) -> Self
+    where
+        Op: crate::api::contract::IpcOperation,
+        H: axum::handler::Handler<T, S>,
+        T: 'static;
+}
+
+impl<S> RegisterOperation<S> for Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    fn register<Op, H, T>(self, _op: Op, handler: H) -> Self
+    where
+        Op: crate::api::contract::IpcOperation,
+        H: axum::handler::Handler<T, S>,
+        T: 'static,
+    {
+        let filter = axum::routing::MethodFilter::try_from(Op::METHOD)
+            .expect("every IPC operation uses a method axum can filter on");
+        self.route(Op::PATH, axum::routing::on(filter, handler))
+    }
+}

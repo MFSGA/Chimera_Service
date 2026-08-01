@@ -29,6 +29,8 @@ pub enum ClientError<'a> {
     ParseFailed(#[from] simd_json::Error),
     #[error("An server error respond: {0:?}")]
     ServerResponseFailed(R<'a, Option<()>>),
+    #[error("IPC request `{operation}` succeeded but carried no data")]
+    EmptyData { operation: &'static str },
     #[error("An error occurred: {0}")]
     Other(#[from] anyhow::Error),
 }
@@ -52,7 +54,7 @@ where
     let (mut sender, conn) =
         hyper::client::conn::http1::handshake::<TokioIo<Stream>, R>(io).await?;
     tokio::task::spawn(async move {
-        if let Err(err) = conn.await {
+        if let Err(err) = conn.with_upgrades().await {
             tracing::error!("An error occurred: {:#?}", err);
         }
     });
@@ -60,18 +62,39 @@ where
     let response = sender.send_request(request).await?;
 
     if response.status().is_client_error() || response.status().is_server_error() {
-        // if server respond 500. It is also might be custom error respond, so that, let we have a try to parse to body
-        if response.status() == 500 {
-            let res = Response { response };
-            let r = res.cast_body::<crate::api::R<Option<()>>>().await?;
-            return Err(ClientError::ServerResponseFailed(r));
-        }
-        return Err(ClientError::Other(anyhow::anyhow!(
-            "Received an error response: {:#?}",
-            response
-        )));
+        let status = response.status();
+        let res = Response { response };
+        return match res.cast_body::<crate::api::R<Option<()>>>().await {
+            Ok(envelope) => Err(ClientError::ServerResponseFailed(envelope)),
+            Err(error) => Err(ClientError::Other(anyhow::anyhow!(
+                "Received HTTP {status}, but failed to decode its error envelope: {error}"
+            ))),
+        };
     }
     Ok(Response { response })
+}
+
+pub(crate) async fn open_websocket<'a>(
+    placeholder: &'a str,
+    request: Request<axum::body::Body>,
+) -> Result<
+    tokio_tungstenite::WebSocketStream<TokioIo<hyper::upgrade::Upgraded>>,
+    ClientError<'a>,
+> {
+    let mut response = send_request(placeholder, request).await?.response;
+    if response.status() != hyper::StatusCode::SWITCHING_PROTOCOLS {
+        return Err(ClientError::Other(anyhow::anyhow!(
+            "WebSocket upgrade returned HTTP {}",
+            response.status()
+        )));
+    }
+    let upgraded = hyper::upgrade::on(&mut response).await?;
+    Ok(tokio_tungstenite::WebSocketStream::from_raw_socket(
+        TokioIo::new(upgraded),
+        tokio_tungstenite::tungstenite::protocol::Role::Client,
+        None,
+    )
+    .await)
 }
 
 impl Response {
