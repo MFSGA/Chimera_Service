@@ -2,6 +2,7 @@ pub mod consts;
 mod events;
 mod instance;
 mod logger;
+mod manager_projection;
 mod routing;
 
 use chimera_ipc::{

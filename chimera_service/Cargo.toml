@@ -42,6 +42,7 @@ chimera-ipc = { path = "../chimera_ipc", default-features = false, features = [
     "server",
     "client",
 ] }
+nyanpasu-core-manager = { path = "../crates/nyanpasu-core-manager" }
 nyanpasu-core-metadata = { path = "../crates/nyanpasu-core-metadata" }
 
 thiserror.workspace = true
