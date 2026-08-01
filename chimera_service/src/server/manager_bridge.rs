@@ -11,7 +11,7 @@ use nyanpasu_core_manager::{
     CoreKind, CoreManager, CoreSpec, Error as ManagerError, InstanceOptions, InstanceSpec,
     ManagerOptions,
 };
-use tokio::sync::{Semaphore, watch};
+use tokio::sync::{Semaphore, broadcast, watch};
 use tokio_util::sync::CancellationToken;
 
 use super::{
@@ -90,6 +90,10 @@ impl CoreManagerService {
 
     pub fn subscribe_requested_core(&self) -> watch::Receiver<Option<CoreType>> {
         self.requested_core.subscribe()
+    }
+
+    pub fn subscribe_logs(&self) -> broadcast::Receiver<nyanpasu_core_manager::LogFrame> {
+        self.manager.subscribe_logs()
     }
 
     pub async fn status(&self) -> CoreInfos {

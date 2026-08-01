@@ -27,11 +27,40 @@ pub async fn run(
     let bridge_manager = core_manager.clone();
     let mut manager_states = core_manager.subscribe();
     let mut requested_core = core_manager.subscribe_requested_core();
+    let mut core_logs = core_manager.subscribe_logs();
     let hub = EventHub::new();
     let state = AppState {
         core_manager: core_manager.clone(),
         hub: hub.clone(),
     };
+    tokio::spawn(async move {
+        loop {
+            match core_logs.recv().await {
+                Ok(frame) => match frame.stream {
+                    nyanpasu_core_manager::LogStream::Stdout => tracing::info!(
+                        target: "chimera_service::core",
+                        core_kind = %frame.kind,
+                        epoch = frame.epoch,
+                        core_timestamp = frame.timestamp,
+                        "{}",
+                        frame.raw
+                    ),
+                    nyanpasu_core_manager::LogStream::Stderr => tracing::error!(
+                        target: "chimera_service::core",
+                        core_kind = %frame.kind,
+                        epoch = frame.epoch,
+                        core_timestamp = frame.timestamp,
+                        "{}",
+                        frame.raw
+                    ),
+                },
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                    tracing::warn!("core log subscriber dropped {skipped} frames");
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
     let state_hub = hub.clone();
     tokio::spawn(async move {
         let mut last = bridge_manager.status().await.state;
