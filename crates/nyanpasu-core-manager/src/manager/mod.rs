@@ -150,6 +150,12 @@ impl CoreManager {
         self.inner.status_tx.borrow().clone()
     }
 
+    /// Validate a config with the selected core binary without changing the
+    /// manager's current state.
+    pub async fn check_config(&self, spec: &crate::spec::InstanceSpec) -> Result<(), Error> {
+        crate::kind::check_config(spec).await
+    }
+
     pub(crate) async fn resolve_core_features(
         &self,
         core: &CoreSpec,
@@ -218,6 +224,28 @@ mod tests {
         let mut invalid = options();
         invalid.control_timeout = Duration::ZERO;
         assert!(CoreManager::new(invalid).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn config_check_failure_does_not_change_manager_state() {
+        let manager = CoreManager::new(options()).await.unwrap();
+        let spec = crate::InstanceSpec {
+            core: CoreSpec {
+                kind: crate::kind::CoreKind::Mihomo,
+                binary_path: "definitely-missing-core".into(),
+                version: Some("v1.18.9".into()),
+                features: Vec::new(),
+            },
+            config_path: "config.yaml".into(),
+            working_dir: ".".into(),
+            pid_file: None,
+            options: crate::InstanceOptions::default(),
+        };
+        assert!(manager.check_config(&spec).await.is_err());
+        assert!(matches!(
+            manager.status().state,
+            crate::CoreState::Stopped { reason: None }
+        ));
     }
 
     #[tokio::test]
