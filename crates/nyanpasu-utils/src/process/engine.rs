@@ -403,6 +403,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn epoch_pid_record_tracks_the_live_child_and_is_cleaned_up() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("config-7.yaml");
+        let pid_file = dir.path().join("core-7.pid");
+        tokio::fs::write(&config, "port: 0\n").await.unwrap();
+
+        let (handle, _events) = long_running_command()
+            .epoch_pid_file(EpochPidFile::new(&pid_file, 7, &config))
+            .spawn()
+            .await
+            .unwrap();
+        let record = crate::process::read_epoch_pid_file(&pid_file)
+            .await
+            .unwrap()
+            .expect("spawn must publish its pid record");
+        assert_eq!(record.pid, handle.pid());
+        assert_eq!(record.epoch, 7);
+        assert_eq!(record.runtime_config, config);
+
+        handle.kill().await.unwrap();
+        handle.wait().await.unwrap();
+        assert!(
+            crate::process::read_epoch_pid_file(&pid_file)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
     async fn hard_kill_completes_wait() {
         let (handle, mut events) = long_running_command().spawn().await.unwrap();
         let ready = tokio::time::timeout(Duration::from_secs(5), async {
