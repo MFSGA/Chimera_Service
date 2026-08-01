@@ -1,17 +1,20 @@
 use std::borrow::Cow;
 
-use axum::{Json, Router, extract::State, http::StatusCode, routing::get};
+use axum::{Json, Router, extract::State, http::StatusCode};
 
-use chimera_ipc::api::{
-    RBuilder,
-    status::{RuntimeInfos, STATUS_ENDPOINT, StatusRes, StatusResBody},
+use chimera_ipc::{
+    api::{
+        RBuilder,
+        contract::Status,
+        status::{RuntimeInfos, StatusRes, StatusResBody},
+    },
+    server::RegisterOperation,
 };
 
 use super::AppState;
 
 pub fn setup() -> Router<AppState> {
-    let router = Router::new();
-    router.route(STATUS_ENDPOINT, get(status))
+    Router::new().register(Status, status)
 }
 
 pub async fn status(State(state): State<AppState>) -> (StatusCode, Json<StatusRes<'static>>) {

@@ -12,19 +12,32 @@ pub mod ws;
 #[derive(Clone)]
 pub struct AppState {
     pub core_manager: CoreManager,
-    pub ws_state: WsState,
+    pub hub: EventHub,
 }
 
 #[instrument(skip(state))]
 pub fn create_router(state: AppState) -> Router {
-    tracing::info!("todo Applying routes...");
-    let tracing_layer = tower_http::trace::TraceLayer::new_for_http();
-    Router::new()
+    tracing::info!("Applying routes...");
+    let tracing_layer =
+        tower_http::trace::TraceLayer::new_for_http().make_span_with(middleware::RequestSpan);
+    let operations = Router::new()
         .merge(status::setup())
         .merge(core::setup())
         .merge(logs::setup())
         .merge(network::setup())
+        .layer(axum::middleware::from_fn(middleware::enforce_timeout));
+    Router::new()
+        .merge(operations)
         .merge(ws::setup())
+        .fallback(middleware::not_found)
+        .method_not_allowed_fallback(middleware::method_not_allowed)
         .with_state(state)
+        .layer(tower_http::catch_panic::CatchPanicLayer::custom(
+            middleware::PanicEnvelope,
+        ))
+        .layer(tower_http::request_id::PropagateRequestIdLayer::x_request_id())
         .layer(tracing_layer)
+        .layer(tower_http::request_id::SetRequestIdLayer::x_request_id(
+            tower_http::request_id::MakeRequestUuid,
+        ))
 }

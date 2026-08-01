@@ -1,17 +1,24 @@
-use axum::{Router, routing::post};
-use chimera_ipc::api::core::{
-    restart::CORE_RESTART_ENDPOINT, start::CORE_START_ENDPOINT, stop::CORE_STOP_ENDPOINT,
+use axum::Router;
+use chimera_ipc::{
+    api::contract::{CoreApply, CoreCheck, CoreRecover, CoreRestart, CoreStart, CoreStop},
+    server::RegisterOperation,
 };
 
 use super::AppState;
 
+pub mod apply;
+pub mod check;
+pub mod recover;
 pub mod restart;
 pub mod start;
 pub mod stop;
 
 pub fn setup() -> Router<AppState> {
     Router::new()
-        .route(CORE_START_ENDPOINT, post(start::start))
-        .route(CORE_STOP_ENDPOINT, post(stop::stop))
-        .route(CORE_RESTART_ENDPOINT, post(restart::restart))
+        .register(CoreStart, start::start)
+        .register(CoreStop, stop::stop)
+        .register(CoreRestart, restart::restart)
+        .register(CoreApply, apply::apply)
+        .register(CoreCheck, check::check)
+        .register(CoreRecover, recover::recover)
 }

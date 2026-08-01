@@ -1,7 +1,11 @@
-use axum::{Json, Router, http::StatusCode, routing::get};
-use chimera_ipc::api::{
-    RBuilder,
-    log::{LOGS_INSPECT_ENDPOINT, LOGS_RETRIEVE_ENDPOINT, LogsRes, LogsResBody},
+use axum::{Json, Router, http::StatusCode};
+use chimera_ipc::{
+    api::{
+        RBuilder,
+        contract::{LogsInspect, LogsRetrieve},
+        log::{LogsRes, LogsResBody},
+    },
+    server::RegisterOperation,
 };
 
 pub fn setup<S>() -> Router<S>
@@ -9,8 +13,8 @@ where
     S: Clone + Send + Sync + 'static,
 {
     Router::new()
-        .route(LOGS_RETRIEVE_ENDPOINT, get(retrieve_logs))
-        .route(LOGS_INSPECT_ENDPOINT, get(inspect_logs))
+        .register(LogsRetrieve, retrieve_logs)
+        .register(LogsInspect, inspect_logs)
 }
 
 pub async fn retrieve_logs() -> (StatusCode, Json<LogsRes<'static>>) {
