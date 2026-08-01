@@ -340,25 +340,147 @@ impl CoreManagerService {
             config_path: config_path.to_path_buf(),
             cancel_token,
             tracker: Some(tracker),
+            revision,
         });
         Ok(())
     }
 
-    pub async fn restart(&self) -> Result<(), anyhow::Error> {
-        let mut manager_guard = self.manager.lock().await;
-        let manager = manager_guard.take();
-        match manager {
-            None => anyhow::bail!("core have not been started yet"),
-            Some(manager) => {
-                let state = Self::state_(Some(&manager));
-                if matches!(state.as_ref(), CoreState::Running) {
-                    self.stop().await?;
-                }
-                drop(manager_guard);
-                self.start(&manager.instance.core_type, manager.config_path.as_path())
-                    .await
+    pub async fn check(
+        &self,
+        core_type: &CoreType,
+        config_path: &Utf8Path,
+    ) -> Result<(), CoreOperationError> {
+        let _slot = self
+            .check_slots
+            .try_acquire()
+            .map_err(|_| CoreOperationError::CheckBusy)?;
+        let config_path = config_path
+            .canonicalize_utf8()
+            .map_err(|error| CoreOperationError::ConfigNotFound(error.into()))?;
+        tokio::fs::metadata(&config_path)
+            .await
+            .map_err(|error| CoreOperationError::ConfigNotFound(error.into()))?;
+        let infos = consts::RuntimeInfos::global();
+        let app_dir = Utf8PathBuf::from_path_buf(infos.nyanpasu_data_dir.clone()).map_err(|_| {
+            CoreOperationError::ConfigCheckFailed(anyhow::anyhow!(
+                "failed to convert app directory to UTF-8"
+            ))
+        })?;
+        let binary_path = find_binary_path(core_type)
+            .map_err(|error| CoreOperationError::BinaryNotFound(error.into()))?;
+        let binary_path = Utf8PathBuf::from_path_buf(binary_path).map_err(|_| {
+            CoreOperationError::BinaryNotFound(anyhow::anyhow!(
+                "failed to convert core binary path to UTF-8"
+            ))
+        })?;
+        run_config_check(core_type, &config_path, &binary_path, &app_dir).await
+    }
+
+    pub async fn apply(
+        &self,
+        core_type: &CoreType,
+        config_path: &Utf8Path,
+        expected_revision: Option<&RevisionIdInfo>,
+    ) -> Result<CoreApplyData, CoreOperationError> {
+        let (old_core_type, old_config_path, old_revision) = {
+            let manager = self.manager.lock().await;
+            let manager = manager.as_ref().ok_or(CoreOperationError::NotStarted)?;
+            if !matches!(Self::state_(Some(manager)).as_ref(), CoreState::Running) {
+                return Err(CoreOperationError::NotStarted);
             }
+            if let Some(expected) = expected_revision
+                && &manager.revision.id() != expected
+            {
+                return Err(CoreOperationError::RevisionConflict);
+            }
+            (
+                manager.instance.core_type.clone(),
+                manager.config_path.clone(),
+                manager.revision.clone(),
+            )
+        };
+
+        self.check(core_type, config_path).await?;
+        let canonical_config = config_path
+            .canonicalize_utf8()
+            .map_err(|error| CoreOperationError::ConfigNotFound(error.into()))?;
+        let desired_hash = tokio::fs::read(&canonical_config)
+            .await
+            .map(|bytes| fnv1a_hex(&bytes))
+            .map_err(|error| CoreOperationError::ConfigNotFound(error.into()))?;
+        if *core_type == old_core_type && desired_hash == old_revision.source_hash {
+            return Ok(CoreApplyData {
+                outcome: ApplyOutcomeKind::Noop,
+                revision: old_revision,
+                warning: None,
+                failed_apply: None,
+            });
         }
+
+        self.stop()
+            .await
+            .map_err(CoreOperationError::ApplyFailed)?;
+        match self.start(core_type, &canonical_config).await {
+            Ok(()) => {
+                let revision = self.status().await.revision.ok_or_else(|| {
+                    CoreOperationError::ApplyFailed(anyhow::anyhow!(
+                        "the restarted core published no revision"
+                    ))
+                })?;
+                Ok(CoreApplyData {
+                    outcome: ApplyOutcomeKind::Restarted,
+                    revision,
+                    warning: Some(
+                        "legacy manager fallback performed a full process restart".to_string(),
+                    ),
+                    failed_apply: None,
+                })
+            }
+            Err(apply_error) => match self.start(&old_core_type, &old_config_path).await {
+                Ok(()) => {
+                    let revision = self.status().await.revision.ok_or_else(|| {
+                        CoreOperationError::ApplyFailed(anyhow::anyhow!(
+                            "rollback succeeded but published no revision"
+                        ))
+                    })?;
+                    Ok(CoreApplyData {
+                        outcome: ApplyOutcomeKind::RolledBack,
+                        revision,
+                        warning: Some(
+                            "legacy manager fallback restored the previous process".to_string(),
+                        ),
+                        failed_apply: Some(apply_error.to_string()),
+                    })
+                }
+                Err(rollback_error) => Err(CoreOperationError::ApplyFailed(anyhow::anyhow!(
+                    "desired config failed: {apply_error}; rollback failed: {rollback_error}"
+                ))),
+            },
+        }
+    }
+
+    pub async fn recover(&self) -> Result<(), CoreOperationError> {
+        // The legacy manager has no quarantine latch. Idempotent success keeps
+        // the endpoint safe while preserving the S8 contract.
+        Ok(())
+    }
+
+    pub async fn restart(&self) -> Result<(), anyhow::Error> {
+        let (core_type, config_path, is_running) = {
+            let manager = self.manager.lock().await;
+            let manager = manager
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("core have not been started yet"))?;
+            (
+                manager.instance.core_type.clone(),
+                manager.config_path.clone(),
+                matches!(Self::state_(Some(manager)).as_ref(), CoreState::Running),
+            )
+        };
+        if is_running {
+            self.stop().await?;
+        }
+        self.start(&core_type, config_path.as_path()).await
     }
 
     pub async fn stop(&self) -> Result<(), anyhow::Error> {
