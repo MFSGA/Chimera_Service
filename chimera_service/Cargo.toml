@@ -42,11 +42,13 @@ chimera-ipc = { path = "../chimera_ipc", default-features = false, features = [
     "server",
     "client",
 ] }
+nyanpasu-core-metadata = { path = "../crates/nyanpasu-core-metadata" }
 
 thiserror.workspace = true
 anyhow = { workspace = true }
 
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
+clap_complete = "4"
 
 tracing.workspace = true
 tracing-appender.workspace = true

@@ -2,10 +2,13 @@
 use crate::logging;
 use clap::{Parser, Subcommand};
 
+mod completions;
 mod install;
+mod restart;
 mod rpc;
 mod status;
 mod uninstall;
+mod update;
 
 mod server;
 mod start;
@@ -21,7 +24,14 @@ pub use server::SHUTDOWN_TOKEN as SERVER_SHUTDOWN_TOKEN;
 /// rpc subcommands are shortcuts for client rpc calls,
 /// It is useful for testing and debugging service rpc calls.
 #[derive(Parser)]
-#[command(version, author, about, long_about, disable_version_flag = true)]
+#[command(
+    version,
+    author,
+    about,
+    long_about,
+    disable_version_flag = true,
+    arg_required_else_help = true
+)]
 struct Cli {
     /// Enable verbose logging
     #[clap(short = 'V', long, default_value = "false")]
@@ -45,13 +55,20 @@ enum Commands {
     Start,
     /// Stop the service
     Stop,
+    /// Restart the service
+    Restart,
     /// Run the server. It should be called by the service manager.
     Server(server::ServerContext), // The main entry point for the service, other commands are the control plane for the service
     /// Get the status of the service
     Status(status::StatusCommand),
+    /// Update the installed service binary
+    Update(update::UpdateCommand),
     /// RPC commands, a shortcut for client rpc calls
     #[command(subcommand)]
     Rpc(rpc::RpcCommand),
+    /// Print a shell completion script on stdout
+    #[command(hide = true)]
+    Completions(completions::CompletionsCommand),
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -77,17 +94,24 @@ pub enum CommandError {
     Other(#[from] anyhow::Error),
 }
 
+fn is_unprivileged(command: &Option<Commands>) -> bool {
+    match command {
+        None
+        | Some(Commands::Status(_))
+        | Some(Commands::Rpc(_))
+        | Some(Commands::Completions(_)) => true,
+        Some(Commands::Update(ctx)) => ctx.check,
+        _ => false,
+    }
+}
+
 pub async fn process() -> Result<(), CommandError> {
     let cli = Cli::parse();
     if cli.version {
         print_version();
     }
 
-    if !matches!(
-        cli.command,
-        Some(Commands::Status(_)) | Some(Commands::Rpc(_)) | None
-    ) && !crate::utils::must_check_elevation()
-    {
+    if !is_unprivileged(&cli.command) && !crate::utils::must_check_elevation() {
         return Err(CommandError::PermissionDenied);
     }
 
@@ -109,13 +133,22 @@ pub async fn process() -> Result<(), CommandError> {
         Some(Commands::Uninstall) => Ok(tokio::task::spawn_blocking(uninstall::uninstall).await??),
         Some(Commands::Start) => Ok(tokio::task::spawn_blocking(start::start).await??),
         Some(Commands::Stop) => Ok(tokio::task::spawn_blocking(stop::stop).await??),
+        Some(Commands::Restart) => Ok(tokio::task::spawn_blocking(restart::restart).await??),
         Some(Commands::Status(ctx)) => Ok(status::status(ctx).await?),
+        Some(Commands::Update(ctx)) => {
+            update::update(ctx).await?;
+            Ok(())
+        }
         Some(Commands::Server(ctx)) => {
             server::server(ctx).await?;
             Ok(())
         }
         Some(Commands::Rpc(ctx)) => {
             rpc::rpc(ctx).await?;
+            Ok(())
+        }
+        Some(Commands::Completions(ctx)) => {
+            completions::completions(ctx);
             Ok(())
         }
         None => {
