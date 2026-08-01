@@ -18,11 +18,11 @@ use crate::{
     ControllerVersionProbe, Error, ProbeHandle, ProbePhase,
     health::{
         HealthTracker, TrackerState,
-        driver::{ProbeDriver, ProbeObservation},
+        driver::ProbeDriver,
     },
     kind::{self, CLICOLOR_FORCE_ENV_NAME, MIHOMO_SAFE_PATHS_ENV_NAME},
     spec::{InstanceSpec, ResolvedController},
-    state::{HealthState, HealthStatus, InstanceState, InstanceStatus, StopReason, now_ms},
+    state::{HealthState, HealthStatus, InstanceState, InstanceStatus, StopReason},
 };
 
 pub struct Instance {
@@ -342,6 +342,7 @@ async fn monitor_loop(
                     break;
                 }
                 Some(SupervisorEvent::Exited(_)) => {}
+                Some(_) => {}
             },
             observation = observations.recv() => {
                 let Some(observation) = observation else { continue };
@@ -350,9 +351,10 @@ async fn monitor_loop(
                 }
                 let Some(tracker) = tracker.as_mut() else { continue };
                 let update = tracker.observe(observation.completed_at, &observation.result);
+                let readiness_succeeded = observation.phase == ProbePhase::Readiness
+                    && update.state == TrackerState::Healthy;
                 shared.publish_health(update, observation.completed_at_ms);
-                if observation.phase == ProbePhase::Readiness
-                    && update.state == TrackerState::Healthy
+                if readiness_succeeded
                     && let Some(supervisor) = shared.supervisor.lock().await.as_ref()
                 {
                     let _ = supervisor.acknowledge_ready(pid).await;

@@ -3,6 +3,7 @@
 mod capability;
 mod error;
 mod health;
+pub mod instance;
 pub mod kind;
 pub mod manager;
 pub mod spec;
@@ -18,6 +19,7 @@ pub use health::{
         ProbeResult,
     },
 };
+pub use instance::{Instance, InstanceBuilder};
 pub use manager::{ApplyOutcome, CoreManager, CoreManagerBuilder, DegradeReason, SwitchOutcome};
 pub use spec::{
     CoreSpec, InstanceOptions, InstanceSpec, LocalIpcPolicy, ManagerOptions, ResolvedController,
