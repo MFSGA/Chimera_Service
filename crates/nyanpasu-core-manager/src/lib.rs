@@ -6,6 +6,7 @@ mod error;
 mod health;
 pub mod instance;
 pub mod kind;
+mod log;
 pub mod manager;
 pub mod spec;
 pub mod state;
@@ -22,6 +23,7 @@ pub use health::{
 };
 pub use instance::{Instance, InstanceBuilder};
 pub use kind::CoreKind;
+pub use log::{LogFrame, LogLevel, LogStream};
 pub use manager::{ApplyOutcome, CoreManager, CoreManagerBuilder, DegradeReason, SwitchOutcome};
 pub use spec::{
     CoreSpec, InstanceOptions, InstanceSpec, LocalIpcPolicy, ManagerOptions, ResolvedController,
