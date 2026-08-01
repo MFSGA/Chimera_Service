@@ -158,6 +158,25 @@ impl Client {
         }
         serde_json::from_slice(&bytes).map_err(|source| Error::Decode { operation, source })
     }
+
+    pub(crate) async fn send_empty(
+        &self,
+        operation: &'static str,
+        request: reqwest::RequestBuilder,
+    ) -> Result<()> {
+        let response = request
+            .send()
+            .await
+            .map_err(|source| Error::Request { operation, source })?;
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(Error::HttpStatus {
+                operation,
+                status: response.status(),
+            })
+        }
+    }
 }
 
 impl std::fmt::Debug for Client {

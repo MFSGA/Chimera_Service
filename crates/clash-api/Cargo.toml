@@ -6,7 +6,7 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
-reqwest = { version = "0.13", features = ["json"] }
+reqwest = { version = "0.13", features = ["json", "query"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = "1"
 thiserror.workspace = true
