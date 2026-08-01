@@ -1,5 +1,6 @@
 //! Health-check policy and transition tracking.
 
+pub(crate) mod driver;
 pub mod probe;
 
 use std::{num::NonZeroU32, time::Duration};
