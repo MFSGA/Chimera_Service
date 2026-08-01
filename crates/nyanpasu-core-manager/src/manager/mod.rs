@@ -6,7 +6,8 @@ use tokio::sync::watch;
 
 use crate::{
     Error, ProbeHandle,
-    spec::ManagerOptions,
+    capability::{ResolvedFeatures, VersionCache, resolve_features},
+    spec::{CoreSpec, ManagerOptions},
     state::{ConfigRevision, CoreStatus},
 };
 
@@ -67,6 +68,7 @@ struct Inner {
     options: ManagerOptions,
     probes: ProbePlan,
     status_tx: watch::Sender<CoreStatus>,
+    version_cache: VersionCache,
 }
 
 impl CoreManagerBuilder {
@@ -135,6 +137,7 @@ impl CoreManager {
                 options,
                 probes,
                 status_tx,
+                version_cache: VersionCache::default(),
             }),
         })
     }
@@ -145,6 +148,18 @@ impl CoreManager {
 
     pub fn status(&self) -> CoreStatus {
         self.inner.status_tx.borrow().clone()
+    }
+
+    pub(crate) async fn resolve_core_features(
+        &self,
+        core: &CoreSpec,
+    ) -> Result<ResolvedFeatures, Error> {
+        resolve_features(
+            &self.inner.version_cache,
+            core,
+            self.inner.options.local_ipc_policy,
+        )
+        .await
     }
 
     pub fn options(&self) -> &ManagerOptions {
@@ -203,6 +218,21 @@ mod tests {
         let mut invalid = options();
         invalid.control_timeout = Duration::ZERO;
         assert!(CoreManager::new(invalid).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn explicit_core_version_resolves_through_the_manager_cache() {
+        let manager = CoreManager::new(options()).await.unwrap();
+        let resolved = manager
+            .resolve_core_features(&CoreSpec {
+                kind: crate::kind::CoreKind::Mihomo,
+                binary_path: "missing-core".into(),
+                version: Some("v1.18.9".into()),
+                features: Vec::new(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(resolved.version.as_deref(), Some("v1.18.9"));
     }
 
     #[tokio::test]
