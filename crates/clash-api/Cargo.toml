@@ -1,0 +1,10 @@
+[package]
+name = "clash-api"
+version = "0.1.1"
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+url = "2"
