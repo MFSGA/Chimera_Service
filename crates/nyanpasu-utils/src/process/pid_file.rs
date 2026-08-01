@@ -559,3 +559,190 @@ async fn kill_recorded_process(record: &EpochPidRecord) -> std::io::Result<()> {
 }
 
 #[cfg(target_os = "linux")]
+async fn kill_recorded_process(record: &EpochPidRecord) -> std::io::Result<()> {
+    let pidfd = LinuxPidFd::open(record.pid)?;
+    let identity = process_identity(record.pid)?.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("pid {} exited before pidfd validation", record.pid),
+        )
+    })?;
+    if !record_matches_identity(record, &identity) {
+        return Err(identity_error(format!(
+            "cannot prove ownership of live pid {}",
+            record.pid
+        )));
+    }
+    pidfd.kill()
+}
+
+#[cfg(target_os = "linux")]
+struct LinuxPidFd(std::os::fd::RawFd);
+
+#[cfg(target_os = "linux")]
+impl LinuxPidFd {
+    fn open(pid: u32) -> std::io::Result<Self> {
+        let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid as libc::pid_t, 0_u32) };
+        if fd < 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(Self(fd as std::os::fd::RawFd))
+        }
+    }
+
+    fn kill(&self) -> std::io::Result<()> {
+        let result = unsafe {
+            libc::syscall(
+                libc::SYS_pidfd_send_signal,
+                self.0,
+                libc::SIGKILL,
+                std::ptr::null::<libc::siginfo_t>(),
+                0_u32,
+            )
+        };
+        if result < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::ESRCH) {
+                Ok(())
+            } else {
+                Err(error)
+            }
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for LinuxPidFd {
+    fn drop(&mut self) {
+        unsafe { libc::close(self.0) };
+    }
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+async fn kill_recorded_process(record: &EpochPidRecord) -> std::io::Result<()> {
+    let identity = process_identity(record.pid)?.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("pid {} exited before final validation", record.pid),
+        )
+    })?;
+    if !record_matches_identity(record, &identity) {
+        return Err(identity_error(format!(
+            "cannot prove ownership of live pid {}",
+            record.pid
+        )));
+    }
+    kill_tree::tokio::kill_tree(record.pid)
+        .await
+        .map(|_| ())
+        .map_err(|error| std::io::Error::other(error.to_string()))
+}
+
+async fn validate_runtime_target(path: &Path) -> std::io::Result<()> {
+    match tokio::fs::symlink_metadata(path).await {
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(invalid_input(format!(
+            "runtime config must not be a symlink: {}",
+            path.display()
+        ))),
+        Ok(metadata) if !metadata.is_file() => Err(invalid_input(format!(
+            "runtime config must be a regular file: {}",
+            path.display()
+        ))),
+        Ok(_) => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+fn epoch_from_file_name(path: &Path, prefix: &str, suffix: &str) -> std::io::Result<u64> {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| invalid_input("epoch artifact filename must be UTF-8"))?;
+    let epoch = name
+        .strip_prefix(prefix)
+        .and_then(|value| value.strip_suffix(suffix))
+        .ok_or_else(|| invalid_input(format!("invalid epoch artifact name `{name}`")))?;
+    epoch
+        .parse()
+        .map_err(|_| invalid_input(format!("invalid epoch in artifact name `{name}`")))
+}
+
+async fn validate_pid_target(path: &Path) -> std::io::Result<()> {
+    match tokio::fs::symlink_metadata(path).await {
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(invalid_input(format!(
+            "pid file must not be a symlink: {}",
+            path.display()
+        ))),
+        Ok(metadata) if !metadata.is_file() => Err(invalid_input(format!(
+            "pid file must be a regular file: {}",
+            path.display()
+        ))),
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+fn required<'a>(fields: &'a BTreeMap<&str, &str>, key: &str) -> std::io::Result<&'a str> {
+    fields
+        .get(key)
+        .copied()
+        .ok_or_else(|| invalid_data(format!("missing epoch pid field `{key}`")))
+}
+
+fn parse_field<T: std::str::FromStr>(
+    fields: &BTreeMap<&str, &str>,
+    key: &str,
+) -> std::io::Result<T> {
+    required(fields, key)?
+        .parse()
+        .map_err(|_| invalid_data(format!("invalid epoch pid field `{key}`")))
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push(HEX[(byte >> 4) as usize] as char);
+        output.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    output
+}
+
+fn hex_decode(value: &str) -> std::io::Result<Vec<u8>> {
+    if value.len() % 2 != 0 {
+        return Err(invalid_data("hex field has odd length"));
+    }
+    value
+        .as_bytes()
+        .chunks_exact(2)
+        .map(|pair| {
+            let high = hex_nibble(pair[0])?;
+            let low = hex_nibble(pair[1])?;
+            Ok((high << 4) | low)
+        })
+        .collect()
+}
+
+fn hex_nibble(value: u8) -> std::io::Result<u8> {
+    match value {
+        b'0'..=b'9' => Ok(value - b'0'),
+        b'a'..=b'f' => Ok(value - b'a' + 10),
+        _ => Err(invalid_data("invalid hex field")),
+    }
+}
+
+fn invalid_input(message: impl Into<String>) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidInput, message.into())
+}
+
+fn invalid_data(message: impl Into<String>) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidData, message.into())
+}
+
+fn identity_error(message: impl Into<String>) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::PermissionDenied, message.into())
+}
+
