@@ -455,6 +455,7 @@ dependencies = [
  "dunce",
  "futures-util",
  "indexmap",
+ "nyanpasu-core-manager",
  "nyanpasu-core-metadata",
  "parking_lot",
  "rustc_version",
