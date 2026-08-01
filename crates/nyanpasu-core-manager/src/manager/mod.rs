@@ -1,9 +1,14 @@
 //! Cross-epoch orchestration and atomic status publication.
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicU64, Ordering},
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::{SystemTime, UNIX_EPOCH},
 };
+
+use tokio::io::AsyncWriteExt;
 
 use tokio::sync::{broadcast, watch};
 
@@ -112,7 +117,7 @@ impl CoreManagerBuilder {
     }
 
     pub async fn build(self) -> Result<CoreManager, Error> {
-        CoreManager::build_configured(self)
+        CoreManager::build_configured(self).await
     }
 }
 
@@ -128,7 +133,7 @@ impl CoreManager {
         Self::builder(options).build().await
     }
 
-    fn build_configured(builder: CoreManagerBuilder) -> Result<Self, Error> {
+    async fn build_configured(builder: CoreManagerBuilder) -> Result<Self, Error> {
         let CoreManagerBuilder { options, probes } = builder;
         let runtime_dir = options
             .runtime_dir
@@ -153,6 +158,8 @@ impl CoreManager {
                 )));
             }
         }
+        tokio::fs::create_dir_all(&runtime_dir).await?;
+        let max_epoch = discover_max_epoch(&runtime_dir).await?;
         let (status_tx, _) = watch::channel(CoreStatus::initial());
         Ok(Self {
             inner: Arc::new(Inner {
@@ -163,7 +170,7 @@ impl CoreManager {
                 version_cache: VersionCache::default(),
                 operation: tokio::sync::Mutex::new(()),
                 ctrl: tokio::sync::Mutex::new(Ctrl::default()),
-                epoch: AtomicU64::new(0),
+                epoch: AtomicU64::new(max_epoch),
             }),
         })
     }
@@ -218,7 +225,7 @@ impl CoreManager {
             resolved.runtime,
         )?;
         let runtime_path = runtime_dir.join(format!("config-{epoch}.yaml"));
-        tokio::fs::write(&runtime_path, &prepared.bytes).await?;
+        publish_runtime_config(&runtime_path, &prepared.bytes).await?;
 
         let mut effective_spec = spec.clone();
         effective_spec.config_path = runtime_path.clone();
@@ -594,6 +601,64 @@ fn map_instance_state(epoch: u64, state: &InstanceState) -> CoreState {
     }
 }
 
+async fn discover_max_epoch(runtime_dir: &camino::Utf8Path) -> Result<u64, Error> {
+    let mut maximum = 0_u64;
+    let mut entries = tokio::fs::read_dir(runtime_dir).await?;
+    while let Some(entry) = entries.next_entry().await? {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        for (prefix, suffix) in [
+            ("config-", ".yaml"),
+            ("core-", ".pid"),
+            ("core-", ".sock"),
+        ] {
+            if let Some(epoch) = name
+                .strip_prefix(prefix)
+                .and_then(|value| value.strip_suffix(suffix))
+                .and_then(|value| value.parse::<u64>().ok())
+            {
+                maximum = maximum.max(epoch);
+            }
+        }
+    }
+    Ok(maximum)
+}
+
+async fn publish_runtime_config(
+    path: &camino::Utf8Path,
+    bytes: &[u8],
+) -> Result<(), Error> {
+    if tokio::fs::try_exists(path).await? {
+        return Err(Error::UnsafeRuntimeArtifact(path.to_owned()));
+    }
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let temp = path.with_extension(format!("yaml.tmp-{}-{nonce}", std::process::id()));
+    let result = async {
+        let mut file = tokio::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temp)
+            .await?;
+        file.write_all(bytes).await?;
+        file.flush().await?;
+        file.sync_all().await?;
+        drop(file);
+        tokio::fs::hard_link(&temp, path).await.map_err(|error| {
+            if error.kind() == std::io::ErrorKind::AlreadyExists {
+                Error::UnsafeRuntimeArtifact(path.to_owned())
+            } else {
+                Error::Io(error)
+            }
+        })
+    }
+    .await;
+    let _ = tokio::fs::remove_file(&temp).await;
+    result
+}
+
 async fn abort_and_await(handle: tokio::task::JoinHandle<()>) {
     handle.abort();
     let _ = handle.await;
@@ -688,6 +753,45 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resolved.version.as_deref(), Some("v1.18.9"));
+    }
+
+    #[tokio::test]
+    async fn runtime_config_publication_is_create_new_and_atomic() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = camino::Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
+        let path = root.join("config-4.yaml");
+
+        publish_runtime_config(&path, b"first: true\n").await.unwrap();
+        let error = publish_runtime_config(&path, b"second: true\n")
+            .await
+            .unwrap_err();
+        assert!(matches!(error, Error::UnsafeRuntimeArtifact(_)));
+        assert_eq!(tokio::fs::read(&path).await.unwrap(), b"first: true\n");
+        let mut entries = tokio::fs::read_dir(&root).await.unwrap();
+        let mut names = Vec::new();
+        while let Some(entry) = entries.next_entry().await.unwrap() {
+            names.push(entry.file_name().to_string_lossy().into_owned());
+        }
+        assert_eq!(names, ["config-4.yaml"]);
+    }
+
+    #[tokio::test]
+    async fn construction_resumes_after_the_highest_epoch_artifact() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = camino::Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
+        tokio::fs::write(root.join("config-7.yaml"), b"old").await.unwrap();
+        tokio::fs::write(root.join("core-9.pid"), b"old").await.unwrap();
+        tokio::fs::write(root.join("config-noise.yaml.tmp"), b"ignored")
+            .await
+            .unwrap();
+
+        let manager = CoreManager::new(ManagerOptions {
+            runtime_dir: Some(root),
+            ..ManagerOptions::default()
+        })
+        .await
+        .unwrap();
+        assert_eq!(manager.inner.epoch.load(Ordering::SeqCst), 9);
     }
 
     #[tokio::test]
