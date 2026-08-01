@@ -13,6 +13,24 @@ fn free_controller_address() -> String {
     address.to_string()
 }
 
+fn fake_core_spec(root: &Utf8PathBuf, config_path: Utf8PathBuf) -> InstanceSpec {
+    InstanceSpec {
+        core: CoreSpec {
+            kind: CoreKind::Mihomo,
+            binary_path: Utf8PathBuf::from(env!("CARGO_BIN_EXE_nyanpasu-fake-core")),
+            version: Some("v1.18.9".into()),
+            features: Vec::new(),
+        },
+        config_path,
+        working_dir: root.clone(),
+        pid_file: None,
+        options: InstanceOptions {
+            startup_timeout: Duration::from_secs(5),
+            ..InstanceOptions::default()
+        },
+    }
+}
+
 #[tokio::test]
 async fn managed_epoch_runs_from_preflight_through_cleanup() {
     let temp = tempfile::tempdir().unwrap();
@@ -33,21 +51,7 @@ async fn managed_epoch_runs_from_preflight_through_cleanup() {
     })
     .await
     .unwrap();
-    let spec = InstanceSpec {
-        core: CoreSpec {
-            kind: CoreKind::Mihomo,
-            binary_path: Utf8PathBuf::from(env!("CARGO_BIN_EXE_nyanpasu-fake-core")),
-            version: Some("v1.18.9".into()),
-            features: Vec::new(),
-        },
-        config_path: source_config.clone(),
-        working_dir: root.clone(),
-        pid_file: None,
-        options: InstanceOptions {
-            startup_timeout: Duration::from_secs(5),
-            ..InstanceOptions::default()
-        },
-    };
+    let spec = fake_core_spec(&root, source_config.clone());
 
     manager.start(spec.clone()).await.unwrap();
     let running = manager.status();
@@ -100,4 +104,40 @@ async fn managed_epoch_runs_from_preflight_through_cleanup() {
     ));
     assert!(!switched_revision.runtime_path.exists());
     assert!(matches!(manager.stop().await, Err(Error::NotStarted)));
+}
+
+#[tokio::test]
+async fn failed_preflight_removes_the_staged_epoch_artifacts() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
+    let runtime_dir = root.join("runtime");
+    let source_config = root.join("invalid.yaml");
+    tokio::fs::write(
+        &source_config,
+        format!(
+            "external-controller: {}\nreject: true\n",
+            free_controller_address()
+        ),
+    )
+    .await
+    .unwrap();
+    let manager = CoreManager::new(ManagerOptions {
+        runtime_dir: Some(runtime_dir.clone()),
+        ..ManagerOptions::default()
+    })
+    .await
+    .unwrap();
+
+    assert!(matches!(
+        manager.start(fake_core_spec(&root, source_config)).await,
+        Err(Error::ConfigCheckFailed(_))
+    ));
+    assert!(!runtime_dir.join("config-1.yaml").exists());
+    assert!(!runtime_dir.join("core-1.pid").exists());
+    assert!(matches!(
+        manager.status().state,
+        CoreState::Stopped {
+            reason: Some(StopReason::Error(_))
+        }
+    ));
 }

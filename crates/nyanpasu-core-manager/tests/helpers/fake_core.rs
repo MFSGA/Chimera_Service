@@ -13,6 +13,12 @@ fn main() {
         return;
     }
     if has_arg(&args, "-t") {
+        let config_path = value_after(&args, "-f").expect("config check needs -f <config>");
+        let raw = std::fs::read_to_string(config_path).expect("read config check input");
+        if raw.contains("reject: true") {
+            eprintln!("fake core rejected config");
+            std::process::exit(1);
+        }
         return;
     }
 

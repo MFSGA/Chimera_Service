@@ -236,7 +236,8 @@ impl CoreManager {
             runtime_features: runtime_features.clone(),
         };
 
-        crate::kind::check_config(&effective_spec).await.map_err(|error| {
+        if let Err(error) = crate::kind::check_config(&effective_spec).await {
+            cleanup_epoch(&revision).await;
             self.inner.publish(
                 CoreState::Stopped {
                     reason: Some(StopReason::Error(error.to_string())),
@@ -246,8 +247,8 @@ impl CoreManager {
                 None,
                 None,
             );
-            error
-        })?;
+            return Err(error);
+        }
         self.inner.publish(
             CoreState::Starting { epoch },
             None,
@@ -270,18 +271,22 @@ impl CoreManager {
         } else if self.inner.probes.liveness_with_readiness {
             builder = builder.liveness_with_readiness_probe();
         }
-        let instance = builder.spawn().await.map_err(|error| {
-            self.inner.publish(
-                CoreState::Stopped {
-                    reason: Some(StopReason::Error(error.to_string())),
-                },
-                None,
-                None,
-                None,
-                None,
-            );
-            error
-        })?;
+        let instance = match builder.spawn().await {
+            Ok(instance) => instance,
+            Err(error) => {
+                cleanup_epoch(&revision).await;
+                self.inner.publish(
+                    CoreState::Stopped {
+                        reason: Some(StopReason::Error(error.to_string())),
+                    },
+                    None,
+                    None,
+                    None,
+                    None,
+                );
+                return Err(error);
+            }
+        };
         let pid = match instance.status().state {
             InstanceState::Running { pid } => pid,
             _ => 0,
