@@ -42,12 +42,13 @@ pub async fn run(
                         break;
                     }
                     let snapshot = bridge_manager.status().await;
-                    if !same_legacy_state(&last, &snapshot.state) {
-                        tracing::info!("State changed: {:?}", snapshot.state);
-                        state_hub.send(WsEvent::new_core_state_changed(snapshot.state.clone()));
-                        last = snapshot.state.clone();
-                    }
+                    let legacy = snapshot.state.clone();
                     state_hub.send(WsEvent::new_core_status_changed(snapshot));
+                    if !same_legacy_state(&last, &legacy) {
+                        tracing::info!("State changed: {:?}", legacy);
+                        state_hub.send(WsEvent::new_core_state_changed(legacy.clone()));
+                        last = legacy;
+                    }
                 }
                 changed = requested_core.changed() => {
                     if changed.is_err() {
