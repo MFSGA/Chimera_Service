@@ -27,6 +27,7 @@ fn main() {
     if raw.contains("finish: true") {
         return;
     }
+    println!("fake core started");
     let value: serde_yaml_ng::Value = serde_yaml_ng::from_str(&raw).expect("parse fake core config");
     let document = value.as_mapping().expect("top-level config mapping");
     let address = document

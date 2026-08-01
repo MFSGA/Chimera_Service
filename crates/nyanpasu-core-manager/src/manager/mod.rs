@@ -5,10 +5,10 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 
-use tokio::sync::watch;
+use tokio::sync::{broadcast, watch};
 
 use crate::{
-    Error, Instance, ProbeHandle,
+    Error, Instance, LogFrame, ProbeHandle,
     capability::{ResolvedFeatures, VersionCache, resolve_features},
     config::ConfigSnapshot,
     spec::{CoreSpec, InstanceSpec, ManagerOptions},
@@ -74,6 +74,7 @@ struct Inner {
     options: ManagerOptions,
     probes: ProbePlan,
     status_tx: watch::Sender<CoreStatus>,
+    log_tx: broadcast::Sender<LogFrame>,
     version_cache: VersionCache,
     operation: tokio::sync::Mutex<()>,
     ctrl: tokio::sync::Mutex<Ctrl>,
@@ -158,6 +159,7 @@ impl CoreManager {
                 options,
                 probes,
                 status_tx,
+                log_tx: broadcast::channel(crate::log::LOG_CHANNEL_CAPACITY).0,
                 version_cache: VersionCache::default(),
                 operation: tokio::sync::Mutex::new(()),
                 ctrl: tokio::sync::Mutex::new(Ctrl::default()),
@@ -172,6 +174,10 @@ impl CoreManager {
 
     pub fn status(&self) -> CoreStatus {
         self.inner.status_tx.borrow().clone()
+    }
+
+    pub fn subscribe_logs(&self) -> broadcast::Receiver<LogFrame> {
+        self.inner.log_tx.subscribe()
     }
 
     pub async fn start(&self, spec: InstanceSpec) -> Result<(), Error> {
@@ -271,6 +277,7 @@ impl CoreManager {
         } else if self.inner.probes.liveness_with_readiness {
             builder = builder.liveness_with_readiness_probe();
         }
+        builder = builder.log_sender(self.inner.log_tx.clone());
         let instance = match builder.spawn().await {
             Ok(instance) => instance,
             Err(error) => {

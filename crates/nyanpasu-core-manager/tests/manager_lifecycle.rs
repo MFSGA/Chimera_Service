@@ -52,8 +52,15 @@ async fn managed_epoch_runs_from_preflight_through_cleanup() {
     .await
     .unwrap();
     let spec = fake_core_spec(&root, source_config.clone());
+    let mut logs = manager.subscribe_logs();
 
     manager.start(spec.clone()).await.unwrap();
+    let first_log = tokio::time::timeout(Duration::from_secs(2), logs.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(first_log.epoch, 1);
+    assert_eq!(first_log.raw, "fake core started");
     let running = manager.status();
     let CoreState::Running { epoch, pid } = running.state else {
         panic!("expected running manager snapshot: {running:?}");

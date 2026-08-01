@@ -9,9 +9,9 @@ use std::{
 };
 
 use nyanpasu_utils::process::{
-    Command, EpochPidFile, ReadinessProbe, Supervisor, SupervisorEvent,
+    Command, EpochPidFile, ProcessEvent, ReadinessProbe, Supervisor, SupervisorEvent,
 };
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{broadcast, mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -21,6 +21,7 @@ use crate::{
         driver::ProbeDriver,
     },
     kind::{self, CLICOLOR_FORCE_ENV_NAME, MIHOMO_SAFE_PATHS_ENV_NAME},
+    log::{LOG_CHANNEL_CAPACITY, LogFrame},
     spec::{InstanceSpec, ResolvedController},
     state::{HealthState, HealthStatus, InstanceState, InstanceStatus, StopReason},
 };
@@ -54,6 +55,7 @@ pub struct InstanceBuilder {
     readiness_probe: Option<ProbeHandle>,
     liveness_probe: Option<ProbeHandle>,
     liveness_with_readiness: bool,
+    log_tx: Option<broadcast::Sender<LogFrame>>,
 }
 
 impl Instance {
@@ -71,6 +73,7 @@ impl Instance {
             readiness_probe: None,
             liveness_probe: None,
             liveness_with_readiness: false,
+            log_tx: None,
         }
     }
 
@@ -94,6 +97,7 @@ impl Instance {
             readiness_probe,
             liveness_probe,
             liveness_with_readiness,
+            log_tx,
         } = builder;
         if tokio::fs::metadata(&spec.config_path).await.is_err() {
             return Err(Error::ConfigNotFound(spec.config_path.clone()));
@@ -129,6 +133,7 @@ impl Instance {
             probe_request_tx,
         });
         let (event_tx, event_rx) = mpsc::unbounded_channel();
+        let log_tx = log_tx.unwrap_or_else(|| broadcast::channel(LOG_CHANNEL_CAPACITY).0);
         let supervisor = Supervisor::builder({
             let spec = spec.clone();
             let controller = controller.clone();
@@ -140,6 +145,22 @@ impl Instance {
         .cancel_token(cancel.clone())
         .on_event(move |event| {
             let _ = event_tx.send(event);
+        })
+        .on_process_event({
+            let kind = spec.core.kind;
+            move |event| match event {
+                ProcessEvent::Stdout(line) => {
+                    let _ = log_tx.send(LogFrame::stdout(kind, epoch, line));
+                }
+                ProcessEvent::Stderr(line) => {
+                    let _ = log_tx.send(LogFrame::stderr(kind, epoch, line));
+                }
+                ProcessEvent::Error(error) => {
+                    tracing::warn!(target: "core", epoch, %kind, "output pump: {error}");
+                }
+                ProcessEvent::Terminated(_) => {}
+                _ => {}
+            }
         })
         .spawn()
         .await?;
@@ -275,6 +296,11 @@ impl InstanceBuilder {
     pub fn liveness_with_readiness_probe(mut self) -> Self {
         self.liveness_probe = None;
         self.liveness_with_readiness = true;
+        self
+    }
+
+    pub(crate) fn log_sender(mut self, sender: broadcast::Sender<LogFrame>) -> Self {
+        self.log_tx = Some(sender);
         self
     }
 
