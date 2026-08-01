@@ -143,9 +143,7 @@ impl CoreManagerService {
         })?;
         let config_path = canonical_config_path(config_file.as_std_path())
             .await
-            .map_err(|error| {
-                OperationError::with_kind(error_kind::CONFIG_NOT_FOUND, error.to_string())
-            })?;
+            .map_err(map_config_path_error)?;
         let spec = self.instance_spec(core_type, config_path)?;
         self.manager.check_config(&spec).await.map_err(Into::into)
     }
@@ -158,9 +156,7 @@ impl CoreManagerService {
     ) -> Result<CoreApplyData, OperationError> {
         let config_path = canonical_config_path(config_file.as_std_path())
             .await
-            .map_err(|error| {
-                OperationError::with_kind(error_kind::CONFIG_NOT_FOUND, error.to_string())
-            })?;
+            .map_err(map_config_path_error)?;
         let spec = self.instance_spec(core_type, config_path)?;
         let outcome = self
             .manager
@@ -254,6 +250,14 @@ fn find_binary_path(infos: &RuntimeInfos, core_type: &CoreType) -> std::io::Resu
     ))
 }
 
+fn map_config_path_error(error: std::io::Error) -> OperationError {
+    if error.kind() == std::io::ErrorKind::NotFound {
+        OperationError::with_kind(error_kind::CONFIG_NOT_FOUND, error.to_string())
+    } else {
+        OperationError::plain(error.to_string())
+    }
+}
+
 async fn canonical_config_path(path: &Path) -> std::io::Result<Utf8PathBuf> {
     let canonical = tokio::fs::canonicalize(path).await?;
     Utf8PathBuf::from_path_buf(dunce::simplified(&canonical).to_path_buf()).map_err(|path| {
@@ -262,4 +266,24 @@ async fn canonical_config_path(path: &Path) -> std::io::Result<Utf8PathBuf> {
             format!("config path is not UTF-8: {}", path.display()),
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_not_found_errors_receive_the_config_kind() {
+        let missing = map_config_path_error(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "missing",
+        ));
+        assert_eq!(missing.kind(), Some(error_kind::CONFIG_NOT_FOUND));
+
+        let denied = map_config_path_error(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "denied",
+        ));
+        assert_eq!(denied.kind(), None);
+    }
 }
