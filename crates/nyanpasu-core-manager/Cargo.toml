@@ -11,6 +11,7 @@ clash-api = { path = "../clash-api" }
 enumset = "1"
 nyanpasu-core-metadata = { path = "../nyanpasu-core-metadata" }
 nyanpasu-utils = { path = "../nyanpasu-utils", features = ["process"] }
+serde_yaml_ng = "0.10"
 thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true

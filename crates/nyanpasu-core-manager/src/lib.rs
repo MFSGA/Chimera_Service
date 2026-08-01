@@ -1,6 +1,7 @@
 //! Clash core lifecycle management primitives.
 
 mod capability;
+mod config;
 mod error;
 mod health;
 pub mod instance;

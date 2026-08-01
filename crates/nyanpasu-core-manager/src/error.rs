@@ -65,6 +65,8 @@ pub enum Error {
     Process(#[from] nyanpasu_utils::process::ProcessError),
     #[error(transparent)]
     Api(#[from] clash_api::Error),
+    #[error("failed to process config YAML: {0}")]
+    Yaml(#[from] serde_yaml_ng::Error),
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }
