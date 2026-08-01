@@ -355,6 +355,33 @@ impl CoreManager {
         Ok(SwitchOutcome::Hard { reason })
     }
 
+    /// Switch to a requested spec as a new epoch.
+    ///
+    /// The graceful-overlap path is still pending; this method currently
+    /// provides the target API with a deterministic hard-switch fallback.
+    pub async fn switch(&self, spec: InstanceSpec) -> Result<SwitchOutcome, Error> {
+        let _operation = self.inner.operation.lock().await;
+        let reason = {
+            let ctrl = self.inner.ctrl.lock().await;
+            match ctrl.current.as_ref() {
+                Some(active) if !active.instance.status().state.is_terminal() => {
+                    hard_switch_reason(active, &spec)
+                }
+                _ => DegradeReason::NotRunning,
+            }
+        };
+        if reason != DegradeReason::NotRunning {
+            self.stop_inner().await?;
+        } else {
+            let stale_exists = self.inner.ctrl.lock().await.current.is_some();
+            if stale_exists {
+                let _ = self.stop_inner().await;
+            }
+        }
+        self.start_inner(spec).await?;
+        Ok(SwitchOutcome::Hard { reason })
+    }
+
     /// Run one serialized reconciliation probe against the active epoch.
     pub async fn reconcile(&self) -> Result<crate::ProbeResult, Error> {
         let _operation = self.inner.operation.lock().await;
@@ -415,9 +442,13 @@ impl Inner {
 }
 
 fn hard_restart_reason(active: &Active) -> DegradeReason {
+    hard_switch_reason(active, &active.source_spec)
+}
+
+fn hard_switch_reason(active: &Active, requested: &InstanceSpec) -> DegradeReason {
     match &active.instance.controller().host {
         clash_api::Host::Http(_) => DegradeReason::HttpController,
-        _ if !matches!(active.source_spec.core.kind, crate::CoreKind::Mihomo) => {
+        _ if !matches!(requested.core.kind, crate::CoreKind::Mihomo) => {
             DegradeReason::UnsupportedKind
         }
         _ => DegradeReason::PatchFailed,

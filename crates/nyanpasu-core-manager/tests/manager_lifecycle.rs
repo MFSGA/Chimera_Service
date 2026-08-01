@@ -61,7 +61,7 @@ async fn managed_epoch_runs_from_preflight_through_cleanup() {
     assert_eq!(revision.generation, 1);
     assert_eq!(running.spec.as_ref().unwrap().config_path, source_config);
     assert!(matches!(
-        manager.start(spec).await,
+        manager.start(spec.clone()).await,
         Err(Error::AlreadyRunning)
     ));
     assert!(manager.reconcile().await.unwrap().is_healthy());
@@ -78,6 +78,18 @@ async fn managed_epoch_runs_from_preflight_through_cleanup() {
     assert!(restarted_revision.runtime_path.exists());
     assert!(!revision.runtime_path.exists());
 
+    assert_eq!(
+        manager.switch(spec).await.unwrap(),
+        SwitchOutcome::Hard {
+            reason: DegradeReason::HttpController
+        }
+    );
+    let switched = manager.status();
+    assert!(matches!(switched.state, CoreState::Running { epoch: 3, .. }));
+    let switched_revision = switched.revision.expect("switched revision");
+    assert!(switched_revision.runtime_path.exists());
+    assert!(!restarted_revision.runtime_path.exists());
+
     manager.stop().await.unwrap();
     let stopped = manager.status();
     assert!(matches!(
@@ -86,6 +98,6 @@ async fn managed_epoch_runs_from_preflight_through_cleanup() {
             reason: Some(StopReason::User)
         }
     ));
-    assert!(!restarted_revision.runtime_path.exists());
+    assert!(!switched_revision.runtime_path.exists());
     assert!(matches!(manager.stop().await, Err(Error::NotStarted)));
 }
