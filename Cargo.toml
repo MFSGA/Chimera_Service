@@ -45,7 +45,7 @@ windows = { version = "0.61", features = [
     "Win32_Storage_FileSystem",
 ] }
 
-simd-json = "0.16"
+simd-json = "0.17"
 chrono = { version = "0.4", features = ["serde"] }
 
 [profile.release]
