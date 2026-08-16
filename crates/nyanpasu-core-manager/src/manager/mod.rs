@@ -706,6 +706,68 @@ async fn publish_runtime_config(
     result
 }
 
+async fn replace_runtime_config(
+    path: &camino::Utf8Path,
+    bytes: &[u8],
+) -> Result<(), Error> {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let temp = path.with_extension(format!("yaml.replace-{}-{nonce}", std::process::id()));
+    let mut file = tokio::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&temp)
+        .await?;
+    file.write_all(bytes).await?;
+    file.flush().await?;
+    file.sync_all().await?;
+    drop(file);
+
+    let target = path.as_std_path().to_path_buf();
+    let replacement = temp.as_std_path().to_path_buf();
+    let result = tokio::task::spawn_blocking(move || atomic_replace(&target, &replacement))
+        .await
+        .map_err(|error| Error::Io(std::io::Error::other(error.to_string())))?;
+    if result.is_err() {
+        let _ = tokio::fs::remove_file(&temp).await;
+    }
+    result.map_err(Error::Io)
+}
+
+#[cfg(unix)]
+fn atomic_replace(target: &std::path::Path, replacement: &std::path::Path) -> std::io::Result<()> {
+    std::fs::rename(replacement, target)
+}
+
+#[cfg(windows)]
+fn atomic_replace(target: &std::path::Path, replacement: &std::path::Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::{
+        Win32::Storage::FileSystem::{REPLACE_FILE_FLAGS, ReplaceFileW},
+        core::PCWSTR,
+    };
+
+    let target: Vec<u16> = target.as_os_str().encode_wide().chain(Some(0)).collect();
+    let replacement: Vec<u16> = replacement
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    unsafe {
+        ReplaceFileW(
+            PCWSTR(target.as_ptr()),
+            PCWSTR(replacement.as_ptr()),
+            PCWSTR::null(),
+            REPLACE_FILE_FLAGS(0),
+            None,
+            None,
+        )
+    }
+    .map_err(std::io::Error::other)
+}
+
 async fn abort_and_await(handle: tokio::task::JoinHandle<()>) {
     handle.abort();
     let _ = handle.await;
@@ -820,6 +882,23 @@ mod tests {
             names.push(entry.file_name().to_string_lossy().into_owned());
         }
         assert_eq!(names, ["config-4.yaml"]);
+    }
+
+    #[tokio::test]
+    async fn runtime_config_replacement_is_atomic_and_cleans_staging() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = camino::Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
+        let path = root.join("config-3.yaml");
+        tokio::fs::write(&path, b"old: true\n").await.unwrap();
+
+        replace_runtime_config(&path, b"new: true\n").await.unwrap();
+        assert_eq!(tokio::fs::read(&path).await.unwrap(), b"new: true\n");
+        let mut entries = tokio::fs::read_dir(&root).await.unwrap();
+        let mut names = Vec::new();
+        while let Some(entry) = entries.next_entry().await.unwrap() {
+            names.push(entry.file_name().to_string_lossy().into_owned());
+        }
+        assert_eq!(names, ["config-3.yaml"]);
     }
 
     #[tokio::test]
