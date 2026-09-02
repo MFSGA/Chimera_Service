@@ -1,8 +1,8 @@
 use reqwest::Method;
 
-use crate::{Client, Result};
+use crate::{Client, Result, retry::RequestMetadata};
 
-#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize, specta::Type)]
 pub struct Version {
     #[serde(default)]
     pub meta: bool,
@@ -11,6 +11,10 @@ pub struct Version {
 
 impl Client {
     pub async fn version(&self) -> Result<Version> {
-        self.send_json("version", Method::GET, "/version").await
+        const OPERATION: &str = "version";
+        self.send_json(RequestMetadata::new(OPERATION, Method::GET, true), || {
+            self.get("/version")
+        })
+        .await
     }
 }

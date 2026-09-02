@@ -1,16 +1,19 @@
-use std::{path::PathBuf, time::Duration};
+use std::{future::Future, path::PathBuf, sync::Arc, time::Duration};
 
+use futures_util::StreamExt;
 use reqwest::{
-    Method,
+    Method, RequestBuilder, Response, Url,
     header::{AUTHORIZATION, HeaderValue},
 };
-use url::Url;
+use reqwest_websocket::Upgrade;
 
-use crate::{Error, Result};
+use crate::{
+    Error, Result,
+    retry::{NoRetry, RequestMetadata, RetryPolicy, SharedRetryPolicy},
+};
 
 const LOCAL_TRANSPORT_BASE_URL: &str = "http://localhost/";
 
-/// The transport used to connect to the Mihomo external controller.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Host {
@@ -19,7 +22,6 @@ pub enum Host {
     Http(Url),
 }
 
-/// More descriptive alias for [`Host`].
 pub type ControllerEndpoint = Host;
 
 impl Host {
@@ -31,23 +33,19 @@ impl Host {
         Self::UnixSocket(path.into())
     }
 
-    /// Construct an HTTP endpoint from either `host:port` or a complete URL.
     pub fn http(base_url: impl AsRef<str>) -> Result<Self> {
         parse_controller_url(base_url.as_ref(), "http")
     }
 
-    /// Construct an HTTPS endpoint from either `host:port` or a complete URL.
     pub fn https(base_url: impl AsRef<str>) -> Result<Self> {
         parse_controller_url(base_url.as_ref(), "https")
     }
 
-    /// Construct an endpoint from a complete HTTP(S) URL.
     pub fn url(base_url: impl AsRef<str>) -> Result<Self> {
         parse_complete_url(base_url.as_ref())
     }
 }
 
-/// Controller secret with redacted debug output.
 #[derive(Clone, Default, PartialEq, Eq)]
 pub struct Secret(String);
 
@@ -83,176 +81,384 @@ impl std::fmt::Debug for Secret {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Client {
     client: reqwest::Client,
     host: Host,
     base_url: Url,
-    secret: Secret,
-}
-
-pub struct ClientBuilder {
-    host: Host,
-    secret: Secret,
-    timeout: Duration,
+    authorization: Option<HeaderValue>,
+    retry_policy: SharedRetryPolicy,
 }
 
 impl Client {
     pub fn builder(host: Host) -> ClientBuilder {
-        ClientBuilder {
-            host,
-            secret: Secret::default(),
-            timeout: Duration::from_secs(10),
-        }
+        ClientBuilder::new(host)
+    }
+
+    pub fn new(host: Host) -> Result<Self> {
+        Self::builder(host).build()
+    }
+
+    pub fn new_named_pipe(path: impl Into<PathBuf>) -> Result<Self> {
+        Self::new(Host::named_pipe(path))
+    }
+
+    pub fn new_unix_socket(path: impl Into<PathBuf>) -> Result<Self> {
+        Self::new(Host::unix_socket(path))
+    }
+
+    #[cfg(unix)]
+    pub fn unix_socket(path: impl Into<PathBuf>) -> Result<Self> {
+        Self::new_unix_socket(path)
     }
 
     pub fn new_http(base_url: impl AsRef<str>) -> Result<Self> {
-        Self::builder(Host::http(base_url)?).build()
+        Self::new(Host::http(base_url)?)
     }
 
     pub fn host(&self) -> &Host {
         &self.host
     }
 
-    pub fn base_url(&self) -> Result<&Url> {
-        Ok(&self.base_url)
+    pub fn base_url(&self) -> &Url {
+        &self.base_url
     }
 
-    pub(crate) fn request(&self, method: Method, endpoint: &str) -> Result<reqwest::RequestBuilder> {
-        let endpoint = endpoint.trim_start_matches('/');
-        let url = self
-            .base_url()?
-            .join(endpoint)
-            .map_err(|source| Error::InvalidBaseUrl {
-                value: endpoint.to_owned(),
-                source,
-            })?;
-        let mut request = self.client.request(method, url);
-        if matches!(&self.host, Host::Http(_)) && !self.secret.is_empty() {
-            let mut value = HeaderValue::from_str(&format!("Bearer {}", self.secret.as_str()))
-                .map_err(Error::InvalidSecret)?;
-            value.set_sensitive(true);
-            request = request.header(AUTHORIZATION, value);
+    pub fn http_client(&self) -> &reqwest::Client {
+        &self.client
+    }
+
+    pub fn endpoint(&self, endpoint: &str) -> Result<Url> {
+        if Url::parse(endpoint).is_ok() {
+            return Err(Error::AbsoluteEndpoint {
+                endpoint: endpoint.to_owned(),
+            });
         }
-        Ok(request)
+        self.base_url
+            .join(endpoint.trim_start_matches('/'))
+            .map_err(|source| Error::InvalidEndpoint {
+                endpoint: endpoint.to_owned(),
+                source,
+            })
     }
 
-    pub(crate) async fn send_json<T: serde::de::DeserializeOwned>(
+    pub fn endpoint_with_segments<I, S>(&self, endpoint: &str, segments: I) -> Result<Url>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let mut url = self.endpoint(endpoint)?;
+        {
+            let error_url = url.clone();
+            let mut path = url
+                .path_segments_mut()
+                .map_err(|()| Error::CannotAppendPathSegment { url: error_url })?;
+            for segment in segments {
+                path.push(segment.as_ref());
+            }
+        }
+        Ok(url)
+    }
+
+    pub fn request(&self, method: Method, endpoint: &str) -> Result<RequestBuilder> {
+        Ok(self.request_url(method, self.endpoint(endpoint)?))
+    }
+
+    pub fn get(&self, endpoint: &str) -> Result<RequestBuilder> {
+        self.request(Method::GET, endpoint)
+    }
+
+    pub fn post(&self, endpoint: &str) -> Result<RequestBuilder> {
+        self.request(Method::POST, endpoint)
+    }
+
+    pub fn put(&self, endpoint: &str) -> Result<RequestBuilder> {
+        self.request(Method::PUT, endpoint)
+    }
+
+    pub fn patch(&self, endpoint: &str) -> Result<RequestBuilder> {
+        self.request(Method::PATCH, endpoint)
+    }
+
+    pub fn delete(&self, endpoint: &str) -> Result<RequestBuilder> {
+        self.request(Method::DELETE, endpoint)
+    }
+
+    pub(crate) fn request_url(&self, method: Method, url: Url) -> RequestBuilder {
+        let request = self.client.request(method, url);
+        match &self.authorization {
+            Some(authorization) => request.header(AUTHORIZATION, authorization.clone()),
+            None => request,
+        }
+    }
+
+    pub(crate) async fn send<F>(&self, metadata: RequestMetadata, make_request: F) -> Result<Response>
+    where
+        F: Fn() -> Result<RequestBuilder>,
+    {
+        self.execute(&metadata, || async {
+            let response = make_request()?
+                .send()
+                .await
+                .map_err(|source| Error::Request {
+                    operation: metadata.operation(),
+                    source,
+                })?;
+            self.ensure_success(response, metadata.operation()).await
+        })
+        .await
+    }
+
+    pub(crate) async fn decode_json<T>(
         &self,
+        response: Response,
         operation: &'static str,
-        method: Method,
-        endpoint: &str,
-    ) -> Result<T> {
-        let response = self
-            .request(method, endpoint)?
-            .send()
-            .await
-            .map_err(|source| Error::Request { operation, source })?;
-        let status = response.status();
+    ) -> Result<T>
+    where
+        T: serde::de::DeserializeOwned,
+    {
         let bytes = response
             .bytes()
             .await
             .map_err(|source| Error::Request { operation, source })?;
-        if !status.is_success() {
-            return Err(Error::HttpStatus { operation, status });
-        }
         serde_json::from_slice(&bytes).map_err(|source| Error::Decode { operation, source })
     }
 
-    pub(crate) async fn send_empty(
+    pub(crate) async fn send_json<T, F>(
         &self,
-        operation: &'static str,
-        request: reqwest::RequestBuilder,
-    ) -> Result<()> {
-        let response = request
-            .send()
-            .await
-            .map_err(|source| Error::Request { operation, source })?;
-        if response.status().is_success() {
-            Ok(())
-        } else {
-            Err(Error::HttpStatus {
-                operation,
-                status: response.status(),
-            })
+        metadata: RequestMetadata,
+        make_request: F,
+    ) -> Result<T>
+    where
+        T: serde::de::DeserializeOwned,
+        F: Fn() -> Result<RequestBuilder>,
+    {
+        let operation = metadata.operation();
+        let response = self.send(metadata, make_request).await?;
+        self.decode_json(response, operation).await
+    }
+
+    pub(crate) async fn send_empty<F>(
+        &self,
+        metadata: RequestMetadata,
+        make_request: F,
+    ) -> Result<()>
+    where
+        F: Fn() -> Result<RequestBuilder>,
+    {
+        self.send(metadata, make_request).await?;
+        Ok(())
+    }
+
+    pub(crate) async fn websocket<F>(
+        &self,
+        metadata: RequestMetadata,
+        make_request: F,
+    ) -> Result<reqwest_websocket::WebSocket>
+    where
+        F: Fn() -> Result<RequestBuilder>,
+    {
+        let operation = metadata.operation();
+        self.execute(&metadata, || async {
+            let response = make_request()?
+                .upgrade()
+                .send()
+                .await
+                .map_err(|source| Error::WebSocket { operation, source })?;
+            response
+                .into_websocket()
+                .await
+                .map_err(|source| Error::WebSocket { operation, source })
+        })
+        .await
+    }
+
+    pub(crate) async fn execute<T, F, Fut>(
+        &self,
+        metadata: &RequestMetadata,
+        operation: F,
+    ) -> Result<T>
+    where
+        F: Fn() -> Fut,
+        Fut: Future<Output = Result<T>>,
+    {
+        let mut delays = self.retry_policy.delays(metadata);
+        loop {
+            match operation().await {
+                Ok(value) => return Ok(value),
+                Err(error) if self.retry_policy.is_retryable(metadata, &error) => {
+                    let Some(delay) = delays.next() else {
+                        return Err(error);
+                    };
+                    tokio::time::sleep(delay).await;
+                }
+                Err(error) => return Err(error),
+            }
         }
+    }
+
+    async fn ensure_success(
+        &self,
+        response: Response,
+        operation: &'static str,
+    ) -> Result<Response> {
+        let status = response.status();
+        if status.is_success() {
+            return Ok(response);
+        }
+        let mut bytes = Vec::new();
+        let mut stream = response.bytes_stream();
+        while bytes.len() < 16 * 1024 {
+            let Some(chunk) = stream.next().await else {
+                break;
+            };
+            let Ok(chunk) = chunk else {
+                break;
+            };
+            let remaining = 16 * 1024 - bytes.len();
+            bytes.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+        }
+        let body = (!bytes.is_empty()).then(|| crate::ErrorBody::from_bytes(&bytes));
+        Err(Error::HttpStatus {
+            operation,
+            status,
+            body,
+        })
     }
 }
 
-impl std::fmt::Debug for Client {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("Client")
-            .field("host", &self.host)
-            .field("secret", &self.secret)
-            .finish_non_exhaustive()
-    }
+pub struct ClientBuilder {
+    host: Host,
+    reqwest: reqwest::ClientBuilder,
+    secret: Option<Secret>,
+    retry_policy: SharedRetryPolicy,
 }
 
 impl ClientBuilder {
+    pub fn new(host: Host) -> Self {
+        Self {
+            host,
+            reqwest: reqwest::Client::builder()
+                .no_proxy()
+                .http1_only()
+                .retry(reqwest::retry::never()),
+            secret: None,
+            retry_policy: Arc::new(NoRetry),
+        }
+    }
+
     pub fn secret(mut self, secret: impl Into<Secret>) -> Self {
-        self.secret = secret.into();
+        self.secret = Some(secret.into());
         self
     }
 
+    /// Backward-compatible timeout convenience retained for manager callers.
     pub fn timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = timeout;
+        self.reqwest = self.reqwest.timeout(timeout);
+        self
+    }
+
+    pub fn retry_policy(mut self, retry_policy: impl RetryPolicy) -> Self {
+        self.retry_policy = Arc::new(retry_policy);
+        self
+    }
+
+    pub fn shared_retry_policy(mut self, retry_policy: Arc<dyn RetryPolicy>) -> Self {
+        self.retry_policy = retry_policy;
+        self
+    }
+
+    pub fn configure_reqwest(
+        mut self,
+        configure: impl FnOnce(reqwest::ClientBuilder) -> reqwest::ClientBuilder,
+    ) -> Self {
+        self.reqwest = configure(self.reqwest);
         self
     }
 
     pub fn build(self) -> Result<Client> {
-        let mut builder = reqwest::Client::builder().timeout(self.timeout);
-        let (host, base_url, secret) = match self.host {
+        let Self {
+            host,
+            mut reqwest,
+            secret,
+            retry_policy,
+        } = self;
+        let (host, base_url) = match host {
             Host::Http(base_url) => {
                 let base_url = normalize_base_url(base_url)?;
-                (Host::Http(base_url.clone()), base_url, self.secret)
+                (Host::Http(base_url.clone()), base_url)
             }
             Host::NamedPipe(path) => {
                 #[cfg(windows)]
                 {
-                    builder = builder.windows_named_pipe(path.as_path());
+                    reqwest = reqwest.windows_named_pipe(path.as_path());
                     (
                         Host::NamedPipe(path),
                         Url::parse(LOCAL_TRANSPORT_BASE_URL)
-                            .expect("valid local transport base URL"),
-                        Secret::default(),
+                            .expect("the local transport base URL must be valid"),
                     )
                 }
                 #[cfg(not(windows))]
                 {
-                    let _ = (path, builder);
+                    let _ = (path, reqwest);
                     return Err(Error::UnsupportedTransport {
                         transport: "Windows named pipe",
+                        platform: std::env::consts::OS,
                     });
                 }
             }
             Host::UnixSocket(path) => {
                 #[cfg(unix)]
                 {
-                    builder = builder.unix_socket(path.as_path());
+                    reqwest = reqwest.unix_socket(path.as_path());
                     (
                         Host::UnixSocket(path),
                         Url::parse(LOCAL_TRANSPORT_BASE_URL)
-                            .expect("valid local transport base URL"),
-                        Secret::default(),
+                            .expect("the local transport base URL must be valid"),
                     )
                 }
                 #[cfg(not(unix))]
                 {
-                    let _ = (path, builder);
+                    let _ = (path, reqwest);
                     return Err(Error::UnsupportedTransport {
                         transport: "Unix domain socket",
+                        platform: std::env::consts::OS,
                     });
                 }
             }
         };
-        let client = builder.build().map_err(Error::BuildClient)?;
+        let authorization = if matches!(host, Host::Http(_)) {
+            secret
+                .filter(|secret| !secret.is_empty())
+                .map(|secret| {
+                    let mut value = HeaderValue::from_str(&format!("Bearer {}", secret.0))
+                        .map_err(Error::InvalidSecret)?;
+                    value.set_sensitive(true);
+                    Ok(value)
+                })
+                .transpose()?
+        } else {
+            None
+        };
+        let client = reqwest.build().map_err(Error::BuildClient)?;
         Ok(Client {
             client,
             host,
             base_url,
-            secret,
+            authorization,
+            retry_policy,
         })
+    }
+}
+
+impl std::fmt::Debug for ClientBuilder {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ClientBuilder")
+            .field("host", &self.host)
+            .field("secret", &self.secret)
+            .field("retry_policy", &self.retry_policy)
+            .finish_non_exhaustive()
     }
 }
 
@@ -296,11 +502,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn host_port_is_ergonomic_and_normalized() {
-        let Host::Http(url) = Host::http("127.0.0.1:9090/api").unwrap() else {
-            panic!("expected http host");
-        };
-        assert_eq!(url.as_str(), "http://127.0.0.1:9090/api/");
+    fn host_port_is_ergonomic_and_base_url_is_normalized() {
+        let client = Client::new_http("127.0.0.1:9090/api").unwrap();
+        assert_eq!(client.base_url().as_str(), "http://127.0.0.1:9090/api/");
+        assert_eq!(
+            client.get("/version").unwrap().build().unwrap().url().as_str(),
+            "http://127.0.0.1:9090/api/version"
+        );
+    }
+
+    #[test]
+    fn dynamic_path_segments_are_percent_encoded() {
+        let client = Client::new_http("127.0.0.1:9090/api").unwrap();
+        let url = client
+            .endpoint_with_segments("/proxies", ["a/b ?#%", "日本語"])
+            .unwrap();
+        assert_eq!(
+            url.as_str(),
+            "http://127.0.0.1:9090/api/proxies/a%2Fb%20%3F%23%25/%E6%97%A5%E6%9C%AC%E8%AA%9E"
+        );
+    }
+
+    #[test]
+    fn secret_is_redacted_and_sensitive() {
+        let client = Client::builder(Host::http("127.0.0.1:9090").unwrap())
+            .secret("do-not-log-me")
+            .build()
+            .unwrap();
+        let request = client.get("/version").unwrap().build().unwrap();
+        assert!(!format!("{client:?}").contains("do-not-log-me"));
+        assert!(request.headers()[AUTHORIZATION].is_sensitive());
     }
 
     #[test]
@@ -310,75 +541,44 @@ mod tests {
             Err(Error::UnsupportedUrlScheme { .. })
         ));
         assert!(matches!(
-            Host::url("http://127.0.0.1/api?secret=x"),
+            Host::url("http://127.0.0.1/api?secret=value"),
             Err(Error::BaseUrlHasQueryOrFragment { .. })
         ));
     }
 
     #[test]
-    fn secret_debug_is_redacted() {
-        let secret = Secret::new("do-not-log-me");
-        assert!(!format!("{secret:?}").contains("do-not-log-me"));
-        let client = Client::builder(Host::http("127.0.0.1:9090").unwrap())
-            .secret("do-not-log-me")
-            .build()
-            .unwrap();
-        assert!(!format!("{client:?}").contains("do-not-log-me"));
-    }
-
-    #[tokio::test]
-    async fn version_request_uses_bearer_auth_and_decodes_response() {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            let mut request = vec![0_u8; 4096];
-            let size = stream.read(&mut request).await.unwrap();
-            let request = String::from_utf8_lossy(&request[..size]);
-            assert!(request.starts_with("GET /version HTTP/1.1"));
-            assert!(request.to_ascii_lowercase().contains("authorization: bearer secret"));
-            let body = r#"{"meta":true,"version":"1.18.9"}"#;
-            let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            );
-            stream.write_all(response.as_bytes()).await.unwrap();
-        });
-
-        let client = Client::builder(Host::http(address.to_string()).unwrap())
-            .secret("secret")
-            .build()
-            .unwrap();
-        let version = client.version().await.unwrap();
-        assert!(version.meta);
-        assert_eq!(version.version, "1.18.9");
-        server.await.unwrap();
+    fn absolute_endpoints_are_rejected() {
+        let client = Client::new_http("127.0.0.1:9090").unwrap();
+        assert!(matches!(
+            client.get("https://example.com/version"),
+            Err(Error::AbsoluteEndpoint { .. })
+        ));
     }
 
     #[cfg(windows)]
     #[test]
-    fn named_pipe_uses_the_synthetic_url_without_auth() {
-        let client = Client::builder(Host::named_pipe(r"\\.\pipe\controller"))
-            .secret("ignored")
+    fn named_pipe_uses_synthetic_url_without_auth() {
+        let path = PathBuf::from(r"\\.\pipe\clash-api-test");
+        let client = Client::builder(Host::NamedPipe(path.clone()))
+            .secret("ignored-for-local-transports")
             .build()
             .unwrap();
-        assert_eq!(client.base_url().unwrap().as_str(), LOCAL_TRANSPORT_BASE_URL);
-        let request = client.request(Method::GET, "/version").unwrap().build().unwrap();
+        assert_eq!(client.host(), &Host::NamedPipe(path));
+        let request = client.get("/version").unwrap().build().unwrap();
         assert_eq!(request.url().as_str(), "http://localhost/version");
         assert!(!request.headers().contains_key(AUTHORIZATION));
     }
 
     #[cfg(unix)]
     #[test]
-    fn unix_socket_uses_the_synthetic_url_without_auth() {
-        let client = Client::builder(Host::unix_socket("/tmp/controller.sock"))
-            .secret("ignored")
+    fn unix_socket_uses_synthetic_url_without_auth() {
+        let path = PathBuf::from("/tmp/clash-api-test.sock");
+        let client = Client::builder(Host::UnixSocket(path.clone()))
+            .secret("ignored-for-local-transports")
             .build()
             .unwrap();
-        assert_eq!(client.base_url().unwrap().as_str(), LOCAL_TRANSPORT_BASE_URL);
-        let request = client.request(Method::GET, "/version").unwrap().build().unwrap();
+        assert_eq!(client.host(), &Host::UnixSocket(path));
+        let request = client.get("/version").unwrap().build().unwrap();
         assert_eq!(request.url().as_str(), "http://localhost/version");
         assert!(!request.headers().contains_key(AUTHORIZATION));
     }
