@@ -8,7 +8,55 @@ use crate::{
     spec::ResolvedController,
 };
 
-use super::Active;
+use super::{Active, ApplyOutcome, CoreManager, quarantine::reject_quarantine};
+
+impl CoreManager {
+    /// Converge the runtime toward the requested spec.
+    ///
+    /// This is the desired-state entry used by the v2 control plane: callers
+    /// do not choose start/reload/restart/switch. The manager derives the
+    /// transition from the current runtime and the requested configuration.
+    pub async fn reconcile(
+        &self,
+        spec: crate::spec::InstanceSpec,
+        expected_applied: Option<crate::RevisionId>,
+    ) -> Result<ApplyOutcome, Error> {
+        let _operation = self.inner.operation.lock().await;
+        let running = {
+            let ctrl = self.inner.ctrl.lock().await;
+            reject_quarantine(&ctrl)?;
+            ctrl.current.as_ref().is_some_and(|active| {
+                !active.instance.state().borrow().state.is_terminal()
+            })
+        };
+        let result = if running {
+            self.apply_config_inner(spec, expected_applied).await
+        } else if let Some(expected) = expected_applied {
+            Err(Error::RevisionConflict {
+                expected,
+                actual: None,
+            })
+        } else {
+            match self.start_inner(spec).await {
+                Ok(()) => self
+                    .status()
+                    .revision
+                    .ok_or_else(|| Error::ApplyFailed("started epoch has no revision".into()))
+                    .map(|revision| ApplyOutcome::Started { revision }),
+                Err(error) => Err(error),
+            }
+        };
+
+        let mut ctrl = self.inner.ctrl.lock().await;
+        let runtime_alive = ctrl.current.as_ref().is_some_and(|active| {
+            !active.instance.state().borrow().state.is_terminal()
+        });
+        if result.is_ok() || !runtime_alive {
+            self.dns_converge(&mut ctrl).await;
+        }
+        result
+    }
+}
 
 pub(super) async fn reconcile_in_place(
     current: &Active,
