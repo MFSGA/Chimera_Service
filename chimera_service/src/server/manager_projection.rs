@@ -1,6 +1,6 @@
 use chimera_ipc::api::{
+    CoreErrorKind,
     core::apply::{ApplyOutcomeKind, CoreApplyData},
-    error_kind,
     status::{
         ConfigRevisionInfo, CoreControllerInfo, CoreHealthInfo, CoreHealthState, CoreInfos,
         CoreState, CoreStateDetail, RevisionIdInfo,
@@ -47,6 +47,7 @@ pub(crate) fn map_apply_outcome(outcome: &ApplyOutcome) -> CoreApplyData {
         current = outcome;
     }
     let (kind, revision, failed_apply) = match current {
+        ApplyOutcome::Started { .. } => unreachable!("v1 apply never starts a stopped core"),
         ApplyOutcome::Noop { revision } => (ApplyOutcomeKind::Noop, revision, None),
         ApplyOutcome::Patched { revision } => (ApplyOutcomeKind::Patched, revision, None),
         ApplyOutcome::Reloaded { revision } => (ApplyOutcomeKind::Reloaded, revision, None),
@@ -70,23 +71,8 @@ pub(crate) fn map_apply_outcome(outcome: &ApplyOutcome) -> CoreApplyData {
     }
 }
 
-pub(crate) fn map_error_kind(error: &ManagerError) -> Option<&'static str> {
-    match error {
-        ManagerError::NotStarted => Some(error_kind::NOT_STARTED),
-        ManagerError::AlreadyRunning => Some(error_kind::ALREADY_RUNNING),
-        ManagerError::RevisionConflict { .. } => Some(error_kind::REVISION_CONFLICT),
-        ManagerError::ManagerQuarantined { .. } => Some(error_kind::QUARANTINED),
-        ManagerError::ConfigCheckFailed(_) => Some(error_kind::CONFIG_CHECK_FAILED),
-        ManagerError::ConfigNotFound(_) => Some(error_kind::CONFIG_NOT_FOUND),
-        ManagerError::BinaryNotFound(_) => Some(error_kind::BINARY_NOT_FOUND),
-        ManagerError::InvalidConfig(_) | ManagerError::Yaml(_) => Some(error_kind::INVALID_CONFIG),
-        ManagerError::ControllerMissing => Some(error_kind::CONTROLLER_MISSING),
-        ManagerError::ApplyFailed(_) => Some(error_kind::APPLY_FAILED),
-        ManagerError::ApplyRollbackFailed { .. } => Some(error_kind::APPLY_ROLLBACK_FAILED),
-        ManagerError::StopUnconfirmed(_) => Some(error_kind::STOP_UNCONFIRMED),
-        ManagerError::DurabilityUncertain { source, .. } => map_error_kind(source),
-        _ => None,
-    }
+pub(crate) fn map_error_kind(error: &ManagerError) -> Option<CoreErrorKind> {
+    error.kind()
 }
 
 fn map_core_state(state: &ManagerCoreState) -> CoreState {
@@ -156,7 +142,7 @@ fn map_health(health: &HealthStatus) -> CoreHealthInfo {
     }
 }
 
-fn map_revision(revision: &ConfigRevision) -> ConfigRevisionInfo {
+pub(crate) fn map_revision(revision: &ConfigRevision) -> ConfigRevisionInfo {
     ConfigRevisionInfo {
         epoch: revision.epoch,
         generation: revision.generation,

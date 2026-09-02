@@ -7,24 +7,35 @@ mod routing;
 
 use chimera_ipc::{
     SERVICE_PLACEHOLDER,
-    api::ws::events::{Event as WsEvent, TraceLog},
+    api::ws::events::Event as WsEvent,
     server::create_server,
 };
 pub use manager_bridge::CoreManagerService as CoreManager;
 pub use logger::Logger;
-use events::{EventHub, should_forward_to_hub};
+use events::EventHub;
 use routing::{AppState, create_router};
 use tokio_util::sync::CancellationToken;
 use tracing_attributes::instrument;
 
 #[instrument]
 pub async fn run(
+    runtime: std::sync::Arc<consts::RuntimeInfos>,
     local_ipc_policy: nyanpasu_core_manager::LocalIpcPolicy,
     token: CancellationToken,
     #[cfg(windows)] sids: &[&str],
     #[cfg(not(windows))] sids: (),
 ) -> Result<(), anyhow::Error> {
-    let core_manager = CoreManager::new(local_ipc_policy, token.clone()).await?;
+    let core_manager = CoreManager::new(runtime.clone(), local_ipc_policy, token.clone()).await?;
+    let control_watch = core_manager.clone();
+    let control_failure_token = token.clone();
+    tokio::spawn(async move {
+        if control_watch.until_control_closed().await
+            == nyanpasu_core_manager::ExecutorExit::Died
+        {
+            tracing::error!("core control executor died; stopping the service");
+            control_failure_token.cancel();
+        }
+    });
     let bridge_manager = core_manager.clone();
     let mut manager_states = core_manager.subscribe();
     let mut requested_core = core_manager.subscribe_requested_core();
@@ -33,28 +44,17 @@ pub async fn run(
     let state = AppState {
         core_manager: core_manager.clone(),
         hub: hub.clone(),
+        runtime,
+        logger: Logger::global().clone(),
     };
+    let log_hub = hub.clone();
     tokio::spawn(async move {
         loop {
             match core_logs.recv().await {
-                Ok(frame) => match frame.stream {
-                    nyanpasu_core_manager::LogStream::Stdout => tracing::info!(
-                        target: "chimera_service::core",
-                        core_kind = %frame.kind,
-                        epoch = frame.epoch,
-                        core_timestamp = frame.timestamp,
-                        "{}",
-                        frame.raw
-                    ),
-                    nyanpasu_core_manager::LogStream::Stderr => tracing::error!(
-                        target: "chimera_service::core",
-                        core_kind = %frame.kind,
-                        epoch = frame.epoch,
-                        core_timestamp = frame.timestamp,
-                        "{}",
-                        frame.raw
-                    ),
-                },
+                Ok(frame) => {
+                    forward_core_log(&frame);
+                    log_hub.send_log(frame);
+                }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
                     tracing::warn!("core log subscriber dropped {skipped} frames");
                 }
@@ -91,29 +91,6 @@ pub async fn run(
             }
         }
     });
-    Logger::global().set_subscriber(Box::new(move |logging| {
-        let target = logging
-            .fields
-            .get("target")
-            .and_then(|value| value.as_str())
-            .unwrap_or_default()
-            .to_string();
-        if !should_forward_to_hub(&target) {
-            return;
-        }
-        hub.send(WsEvent::new_log(TraceLog {
-            timestamp: logging.timestamp,
-            level: logging.level,
-            message: logging
-                .fields
-                .get("message")
-                .and_then(|value| value.as_str().map(str::to_string))
-                .unwrap_or_default(),
-            target,
-            fields: logging.fields,
-        }));
-    }));
-
     let app = create_router(state);
     tracing::info!("Starting server...");
     let shutdown_token = token.clone();
@@ -129,6 +106,22 @@ pub async fn run(
     core_manager.shutdown().await;
     result?;
     Ok(())
+}
+
+fn forward_core_log(frame: &nyanpasu_core_manager::LogFrame) {
+    let kind = frame.kind;
+    let epoch = frame.epoch;
+    let stream = frame.stream;
+    let core_level = frame.level;
+    let raw = &frame.raw;
+    match core_level {
+        nyanpasu_core_manager::LogLevel::Trace => {
+            tracing::trace!(target: "chimera_service::core", ?core_level, ?stream, %kind, epoch, "{raw}")
+        }
+        _ => {
+            tracing::debug!(target: "chimera_service::core", ?core_level, ?stream, %kind, epoch, "{raw}")
+        }
+    }
 }
 
 fn same_legacy_state(

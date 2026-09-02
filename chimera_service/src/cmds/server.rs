@@ -1,4 +1,4 @@
-use std::{collections::BTreeSet, path::PathBuf, sync::OnceLock};
+use std::{collections::BTreeSet, path::PathBuf, sync::{Arc, OnceLock}};
 
 #[cfg(windows)]
 use anyhow::Context;
@@ -84,7 +84,7 @@ pub async fn server_inner(
         tracing::error!("create pid file error: {}", e);
     };
 
-    crate::server::consts::RuntimeInfos::set_infos(RuntimeInfos {
+    let runtime = Arc::new(RuntimeInfos {
         service_data_dir,
         service_config_dir,
         nyanpasu_config_dir,
@@ -104,7 +104,7 @@ pub async fn server_inner(
     #[cfg(windows)]
     tracing::info!(sids = ?sids_str, "Loaded acl file");
 
-    crate::server::run(ctx.local_ipc_policy.into(), token, sids_str).await?;
+    crate::server::run(runtime, ctx.local_ipc_policy.into(), token, sids_str).await?;
     Ok(())
 }
 

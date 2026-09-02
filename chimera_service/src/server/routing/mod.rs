@@ -1,6 +1,8 @@
+use std::sync::Arc;
+
 use axum::Router;
 use tracing_attributes::instrument;
-use super::{CoreManager, events::EventHub};
+use super::{CoreManager, Logger, consts::RuntimeInfos, events::EventHub};
 
 pub mod core;
 pub mod logs;
@@ -9,10 +11,15 @@ pub mod network;
 pub mod status;
 pub mod ws;
 
+#[cfg(test)]
+mod tests;
+
 #[derive(Clone)]
 pub struct AppState {
     pub core_manager: CoreManager,
     pub hub: EventHub,
+    pub runtime: Arc<RuntimeInfos>,
+    pub logger: Logger<'static>,
 }
 
 #[instrument(skip(state))]

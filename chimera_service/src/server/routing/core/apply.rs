@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use axum::{Json, extract::State, http::StatusCode};
 use chimera_ipc::api::{
-    RBuilder, error_kind,
+    CoreErrorKind, RBuilder,
     core::apply::{CoreApplyReq, CoreApplyRes},
 };
 
@@ -17,7 +17,7 @@ pub async fn apply(
             StatusCode::BAD_REQUEST,
             Json(RBuilder::other_error_with_kind(
                 Cow::Borrowed("config path is not valid UTF-8"),
-                Some(Cow::Borrowed(error_kind::INVALID_CONFIG)),
+                Some(CoreErrorKind::InvalidConfig),
             )),
         );
     };
@@ -36,7 +36,7 @@ pub async fn apply(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(RBuilder::other_error_with_kind(
                 Cow::Owned(error.to_string()),
-                error.kind().map(Cow::Borrowed),
+                error.kind(),
             )),
         ),
     }

@@ -12,7 +12,7 @@ pub async fn recover(State(state): State<AppState>) -> (StatusCode, Json<CoreRec
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(RBuilder::other_error_with_kind(
                 Cow::Owned(error.to_string()),
-                error.kind().map(Cow::Borrowed),
+                error.kind(),
             )),
         ),
     }

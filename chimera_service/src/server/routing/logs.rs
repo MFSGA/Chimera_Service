@@ -1,4 +1,4 @@
-use axum::{Json, Router, http::StatusCode};
+use axum::{Json, Router, extract::State, http::StatusCode};
 use chimera_ipc::{
     api::{
         RBuilder,
@@ -8,23 +8,22 @@ use chimera_ipc::{
     server::RegisterOperation,
 };
 
-pub fn setup<S>() -> Router<S>
-where
-    S: Clone + Send + Sync + 'static,
-{
+use super::AppState;
+
+pub fn setup() -> Router<AppState> {
     Router::new()
         .register(LogsRetrieve, retrieve_logs)
         .register(LogsInspect, inspect_logs)
 }
 
-pub async fn retrieve_logs() -> (StatusCode, Json<LogsRes<'static>>) {
-    let logs = crate::server::logger::Logger::global().retrieve_logs();
+pub async fn retrieve_logs(State(state): State<AppState>) -> (StatusCode, Json<LogsRes<'static>>) {
+    let logs = state.logger.retrieve_logs();
     let res = RBuilder::success(LogsResBody { logs });
     (StatusCode::OK, Json(res))
 }
 
-pub async fn inspect_logs() -> (StatusCode, Json<LogsRes<'static>>) {
-    let logs = crate::server::logger::Logger::global().inspect_logs();
+pub async fn inspect_logs(State(state): State<AppState>) -> (StatusCode, Json<LogsRes<'static>>) {
+    let logs = state.logger.inspect_logs();
     let res = RBuilder::success(LogsResBody { logs });
     (StatusCode::OK, Json(res))
 }

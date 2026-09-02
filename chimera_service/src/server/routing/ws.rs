@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use axum::{
     Router,
     extract::{
@@ -9,13 +11,11 @@ use axum::{
 };
 use chimera_ipc::api::ws::events::{EVENT_URI, Event};
 use futures_util::{SinkExt, StreamExt, stream::SplitSink};
+use nyanpasu_core_manager::LogFrame;
 use tokio::sync::broadcast::error::RecvError;
 
 use super::AppState;
-use crate::server::{
-    CoreManager,
-    events::{EventHub, WS_LAG_LOG_TARGET},
-};
+use crate::server::{CoreManager, events::EventHub};
 
 pub fn setup() -> Router<AppState> {
     Router::new().route(EVENT_URI, any(ws_handler))
@@ -27,8 +27,17 @@ async fn ws_handler(State(state): State<AppState>, ws: WebSocketUpgrade) -> Resp
     ws.on_upgrade(move |socket| handle_socket(socket, state.hub, state.core_manager))
 }
 
+enum Next {
+    Event(Event),
+    Log(Arc<LogFrame>),
+    StatusLag(u64),
+    LogLag(u64),
+    Closed,
+}
+
 async fn handle_socket(socket: WebSocket, hub: EventHub, core_manager: CoreManager) {
     let mut events = hub.subscribe();
+    let mut logs = hub.subscribe_logs();
     let (mut sink, mut stream) = socket.split();
 
     let handler = async { while let Some(Ok(_)) = stream.next().await {} };
@@ -38,23 +47,41 @@ async fn handle_socket(socket: WebSocket, hub: EventHub, core_manager: CoreManag
             return;
         }
         loop {
-            match events.recv().await {
-                Ok(event) => {
+            let next = tokio::select! {
+                received = events.recv() => match received {
+                    Ok(event) => Next::Event(event),
+                    Err(RecvError::Lagged(skipped)) => Next::StatusLag(skipped),
+                    Err(RecvError::Closed) => Next::Closed,
+                },
+                received = logs.recv() => match received {
+                    Ok(frame) => Next::Log(frame),
+                    Err(RecvError::Lagged(skipped)) => Next::LogLag(skipped),
+                    Err(RecvError::Closed) => Next::Closed,
+                },
+            };
+            match next {
+                Next::Event(event) => {
                     if !send_event(&mut sink, &event).await {
                         break;
                     }
                 }
-                Err(RecvError::Lagged(skipped)) => {
-                    tracing::warn!(
-                        target: WS_LAG_LOG_TARGET,
-                        "ws subscriber dropped {skipped} events"
-                    );
+                Next::Log(frame) => {
+                    if !send_event(&mut sink, &Event::new_core_log(frame)).await {
+                        break;
+                    }
+                }
+                Next::StatusLag(skipped) => {
+                    tracing::warn!("ws subscriber dropped {skipped} status events");
                     events = events.resubscribe();
                     if !send_snapshot(&mut sink, &core_manager).await {
                         break;
                     }
                 }
-                Err(RecvError::Closed) => break,
+                Next::LogLag(skipped) => {
+                    tracing::debug!("ws subscriber dropped {skipped} core log frames");
+                    logs = logs.resubscribe();
+                }
+                Next::Closed => break,
             }
         }
     };
