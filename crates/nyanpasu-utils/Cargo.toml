@@ -18,6 +18,9 @@ tempfile = "3"
 [target.'cfg(windows)'.dependencies]
 windows.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.31", features = ["fs"], optional = true }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
 
@@ -26,4 +29,5 @@ sysinfo = "0.37"
 
 [features]
 default = []
-process = []
+atomic_fs = ["dep:nix"]
+process = ["atomic_fs"]
