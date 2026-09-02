@@ -92,6 +92,31 @@ impl Command {
         self
     }
 
+    /// Spawn a long-running child and stream its events.
+    pub async fn spawn(
+        self,
+    ) -> Result<
+        (
+            super::ProcessHandle,
+            tokio::sync::mpsc::Receiver<super::ProcessEvent>,
+        ),
+        super::ProcessError,
+    > {
+        let parts = super::engine::spawn(self).await?;
+        let handle = super::ProcessHandle {
+            pid: parts.pid,
+            containment: parts.containment,
+            ctrl: parts.ctrl_tx,
+            terminated: parts.terminated_rx,
+        };
+        Ok((handle, parts.events_rx))
+    }
+
+    /// Run once and capture stdout/stderr. A non-zero exit is data, not an error.
+    pub async fn output(self) -> Result<super::ProcessOutput, super::ProcessError> {
+        super::engine::run_capture(self).await
+    }
+
 }
 
 #[cfg(test)]

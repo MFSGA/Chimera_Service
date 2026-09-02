@@ -1,6 +1,7 @@
 //! Generic child-process management primitives.
 
 mod command;
+mod engine;
 mod error;
 mod event;
 mod handle;
