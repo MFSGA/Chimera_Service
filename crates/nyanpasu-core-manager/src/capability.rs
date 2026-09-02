@@ -10,6 +10,7 @@ use nyanpasu_core_metadata::{CoreVersion, FeatureSupport};
 
 use crate::{
     Error,
+    config::LOCAL_TRANSPORT_FEATURE,
     spec::{CoreSpec, LocalIpcPolicy},
 };
 
@@ -19,11 +20,6 @@ pub enum RuntimeFeature {
     /// The epoch's control channel is a manager-owned local IPC endpoint.
     LocalIpc,
 }
-
-#[cfg(windows)]
-const LOCAL_TRANSPORT_FEATURE: Feature = Feature::NamedPipeIpc;
-#[cfg(not(windows))]
-const LOCAL_TRANSPORT_FEATURE: Feature = Feature::UnixSocketIpc;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct VersionCacheKey {

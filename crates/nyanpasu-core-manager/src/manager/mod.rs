@@ -332,7 +332,7 @@ impl CoreManager {
         let runtime_dir = self.inner.store.dir();
         let source_path = snapshot.source_path().to_owned();
         let source_document = snapshot.document().clone();
-        let prepared = snapshot.prepare(
+        let prepared = snapshot.prepare_full(
             self.inner.options.controller_template.as_deref(),
             runtime_dir,
             epoch,

@@ -8,12 +8,9 @@ use std::collections::BTreeSet;
 
 use serde_yaml_ng::{Mapping, Value};
 
-use super::diff::{DiffEntry, collect_leaves, diff, value_at};
+use super::{clash, diff::{DiffEntry, collect_leaves, diff, value_at}};
 use crate::{Error, InstanceSpec, kind::CoreKind};
 
-const CONTROLLER_FIELDS: &[&str] = &[
-    "external-controller", "external-controller-pipe", "external-controller-unix", "secret",
-];
 const INBOUND_PORT_FIELDS: &[&str] =
     &["port", "socks-port", "redir-port", "tproxy-port", "mixed-port"];
 const PATCH_FIELDS: &[&str] = &[
@@ -137,7 +134,7 @@ pub(crate) fn classify(
         entry
             .path
             .first()
-            .is_some_and(|root| CONTROLLER_FIELDS.contains(&root.as_str()))
+            .is_some_and(|root| clash::CONTROLLER_FIELDS.contains(&root.as_str()))
             || is_dns_listen(&entry.path)
     }) {
         return Ok(ConfigChange::Switch);

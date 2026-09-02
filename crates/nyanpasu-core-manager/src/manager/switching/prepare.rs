@@ -41,7 +41,7 @@ impl CoreManager {
             runtime,
             version,
         } = resolved;
-        let full = snapshot.prepare(
+        let full = snapshot.prepare_full(
             self.inner.options.controller_template.as_deref(),
             self.inner.store.dir(),
             epoch,

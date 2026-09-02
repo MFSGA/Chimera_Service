@@ -1,8 +1,11 @@
 //! Immutable YAML snapshots and deterministic controller preparation.
 
+mod clash;
 mod diff;
 pub(crate) mod mihomo;
 pub mod runtime_store;
+
+pub(crate) use clash::LOCAL_TRANSPORT_FEATURE;
 
 use camino::{Utf8Path, Utf8PathBuf};
 use enumset::EnumSet;
@@ -12,11 +15,6 @@ use crate::{
     Error, RuntimeFeature,
     spec::ResolvedController,
 };
-
-const EXTERNAL_CONTROLLER: &str = "external-controller";
-const EXTERNAL_CONTROLLER_PIPE: &str = "external-controller-pipe";
-const EXTERNAL_CONTROLLER_UNIX: &str = "external-controller-unix";
-const SECRET: &str = "secret";
 
 #[derive(Debug, Clone)]
 pub(crate) struct ConfigSnapshot {
@@ -33,6 +31,20 @@ pub(crate) struct PreparedConfig {
     pub rewrote_controller: bool,
     pub source_hash: String,
     pub effective_hash: String,
+}
+
+#[derive(Debug)]
+pub(crate) struct ConfigInfo {
+    pub controller: Option<RawController>,
+    pub secret: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RawController {
+    Pipe(String),
+    #[cfg_attr(windows, allow(dead_code))]
+    Unix(String),
+    Http(String),
 }
 
 impl ConfigSnapshot {
@@ -74,7 +86,12 @@ impl ConfigSnapshot {
         &self.document
     }
 
-    pub(crate) fn prepare(
+    #[cfg(test)]
+    pub(crate) fn info(&self) -> ConfigInfo {
+        clash::inspect(&self.document)
+    }
+
+    pub(crate) fn prepare_full(
         &self,
         controller_template: Option<&str>,
         runtime_dir: &Utf8Path,
@@ -106,9 +123,9 @@ impl ConfigSnapshot {
         if zero_inbounds {
             mihomo::zero_inbounds(&mut document);
         }
-        let local = runtime.contains(RuntimeFeature::LocalIpc);
-        if local {
-            rewrite_managed_controller(
+        let rewrote_controller = runtime.contains(RuntimeFeature::LocalIpc);
+        if rewrote_controller {
+            clash::rewrite_managed_controller(
                 &mut document,
                 managed_endpoint_path(runtime_dir, controller_template, epoch)?,
             );
@@ -116,7 +133,12 @@ impl ConfigSnapshot {
         let Value::Mapping(document) = canonicalize(Value::Mapping(document))? else {
             unreachable!("canonical mapping stays a mapping")
         };
-        let controller = resolve_controller(&document, local)?;
+        let info = if rewrote_controller {
+            clash::inspect(&document)
+        } else {
+            clash::inspect_http(&document)
+        };
+        let controller = resolve_controller(&info)?;
         let bytes = serialize_mapping(&document)?;
         Ok(PreparedConfig {
             effective_hash: semantic_hash(&bytes),
@@ -124,43 +146,22 @@ impl ConfigSnapshot {
             bytes,
             document,
             controller,
-            rewrote_controller: local,
+            rewrote_controller,
         })
     }
 }
 
-fn resolve_controller(document: &Mapping, allow_local: bool) -> Result<ResolvedController, Error> {
-    let secret = str_value(document, SECRET);
-    let host = if allow_local {
-        #[cfg(windows)]
-        let local = str_value(document, EXTERNAL_CONTROLLER_PIPE).map(clash_api::Host::named_pipe);
-        #[cfg(not(windows))]
-        let local = str_value(document, EXTERNAL_CONTROLLER_UNIX).map(clash_api::Host::unix_socket);
-        local.or_else(|| {
-            str_value(document, EXTERNAL_CONTROLLER)
-                .and_then(|address| clash_api::Host::http(probe_address(&address)).ok())
-        })
-    } else {
-        str_value(document, EXTERNAL_CONTROLLER)
-            .and_then(|address| clash_api::Host::http(probe_address(&address)).ok())
-    }
-    .ok_or(Error::ControllerMissing)?;
-    Ok(ResolvedController { host, secret })
-}
-
-fn rewrite_managed_controller(document: &mut Mapping, endpoint: String) {
-    for field in [
-        EXTERNAL_CONTROLLER,
-        EXTERNAL_CONTROLLER_PIPE,
-        EXTERNAL_CONTROLLER_UNIX,
-    ] {
-        document.remove(Value::String(field.to_owned()));
-    }
-    #[cfg(windows)]
-    let field = EXTERNAL_CONTROLLER_PIPE;
-    #[cfg(not(windows))]
-    let field = EXTERNAL_CONTROLLER_UNIX;
-    document.insert(Value::String(field.to_owned()), Value::String(endpoint));
+pub(crate) fn resolve_controller(info: &ConfigInfo) -> Result<ResolvedController, Error> {
+    let raw = info.controller.as_ref().ok_or(Error::ControllerMissing)?;
+    let host = match raw {
+        RawController::Pipe(path) => clash_api::Host::named_pipe(path),
+        RawController::Unix(path) => clash_api::Host::unix_socket(path),
+        RawController::Http(address) => clash_api::Host::http(probe_address(address))?,
+    };
+    Ok(ResolvedController {
+        host,
+        secret: info.secret.clone(),
+    })
 }
 
 pub(crate) fn managed_endpoint_path(
@@ -294,10 +295,10 @@ mod tests {
         let second = snapshot("external-controller: 127.0.0.1:9090\nsecret: token\n");
         let runtime = EnumSet::new();
         let first = first
-            .prepare(None, Utf8Path::new("runtime"), 1, runtime)
+            .prepare_full(None, Utf8Path::new("runtime"), 1, runtime)
             .unwrap();
         let second = second
-            .prepare(None, Utf8Path::new("runtime"), 1, runtime)
+            .prepare_full(None, Utf8Path::new("runtime"), 1, runtime)
             .unwrap();
         assert_eq!(first.source_hash, second.source_hash);
         assert_eq!(first.effective_hash, second.effective_hash);
@@ -307,7 +308,7 @@ mod tests {
     #[test]
     fn wildcard_http_controller_is_probed_through_loopback() {
         let prepared = snapshot("external-controller: 0.0.0.0:9090\n")
-            .prepare(None, Utf8Path::new("runtime"), 2, EnumSet::new())
+            .prepare_full(None, Utf8Path::new("runtime"), 2, EnumSet::new())
             .unwrap();
         let clash_api::Host::Http(url) = prepared.controller.host else {
             panic!("expected HTTP controller");
@@ -319,7 +320,7 @@ mod tests {
     fn managed_controller_is_epoch_scoped_and_replaces_http() {
         let runtime = EnumSet::only(RuntimeFeature::LocalIpc);
         let prepared = snapshot("external-controller: 127.0.0.1:9090\nsecret: token\n")
-            .prepare(
+            .prepare_full(
                 Some("managed-{epoch}.sock"),
                 Utf8Path::new("runtime"),
                 7,
@@ -334,6 +335,29 @@ mod tests {
         assert!(matches!(prepared.controller.host, clash_api::Host::NamedPipe(_)));
         #[cfg(not(windows))]
         assert!(matches!(prepared.controller.host, clash_api::Host::UnixSocket(_)));
+    }
+
+    #[test]
+    fn extracts_http_controller_and_secret() {
+        let info = snapshot("external-controller: 127.0.0.1:9090\nsecret: s3cret\n").info();
+        assert_eq!(
+            info.controller,
+            Some(RawController::Http("127.0.0.1:9090".into()))
+        );
+        assert_eq!(info.secret.as_deref(), Some("s3cret"));
+    }
+
+    #[test]
+    fn http_mode_ignores_a_user_declared_local_controller() {
+        #[cfg(windows)]
+        let source = snapshot(r"external-controller-pipe: \\.\pipe\source");
+        #[cfg(not(windows))]
+        let source = snapshot("external-controller-unix: /tmp/source.sock");
+
+        let error = source
+            .prepare_full(None, Utf8Path::new("runtime"), 1, EnumSet::new())
+            .unwrap_err();
+        assert!(matches!(error, Error::ControllerMissing));
     }
 
     #[test]

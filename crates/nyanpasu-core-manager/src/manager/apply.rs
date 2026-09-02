@@ -56,7 +56,7 @@ impl CoreManager {
             previous_spec.config_path.clone(),
             current_source.clone(),
         )?;
-        let candidate = snapshot.prepare(
+        let candidate = snapshot.prepare_full(
             self.inner.options.controller_template.as_deref(),
             self.inner.store.dir(),
             previous_revision.epoch,
