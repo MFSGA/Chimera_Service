@@ -98,7 +98,7 @@ async fn managed_epoch_runs_from_preflight_through_cleanup() {
         manager.start(spec.clone()).await,
         Err(Error::AlreadyRunning)
     ));
-    assert!(manager.reconcile().await.unwrap().is_healthy());
+    assert!(manager.probe_reconcile().await.unwrap().is_healthy());
 
     assert_eq!(
         manager.restart().await.unwrap(),
@@ -182,6 +182,154 @@ async fn failed_apply_rolls_back_to_the_previous_spec() {
     assert!(matches!(manager.status().state, CoreState::Running { epoch: 3, .. }));
     assert_eq!(manager.status().spec.unwrap().config_path, original.config_path);
     manager.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn restart_survives_a_normal_stop() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
+    let source = root.join("restart.yaml");
+    tokio::fs::write(
+        &source,
+        format!("external-controller: {}\n", free_controller_address()),
+    )
+    .await
+    .unwrap();
+    let manager = CoreManager::new(ManagerOptions {
+        runtime_dir: Some(root.join("runtime")),
+        ..ManagerOptions::default()
+    })
+    .await
+    .unwrap();
+    manager.start(fake_core_spec(&root, source)).await.unwrap();
+    manager.stop().await.unwrap();
+
+    assert_eq!(
+        manager.restart().await.unwrap(),
+        SwitchOutcome::Hard {
+            reason: DegradeReason::NotRunning
+        }
+    );
+    assert!(matches!(manager.status().state, CoreState::Running { epoch: 2, .. }));
+    manager.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn failed_start_reports_the_core_diagnostic_tail() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
+    let source = root.join("fatal.yaml");
+    tokio::fs::write(
+        &source,
+        format!(
+            "external-controller: {}\nstderr-log: 'fatal startup detail'\nfinish: true\n",
+            free_controller_address()
+        ),
+    )
+    .await
+    .unwrap();
+    let manager = CoreManager::new(ManagerOptions {
+        runtime_dir: Some(root.join("runtime")),
+        ..ManagerOptions::default()
+    })
+    .await
+    .unwrap();
+
+    let error = manager.start(fake_core_spec(&root, source)).await.unwrap_err();
+    let tail = match error {
+        Error::StartupFailed { stderr_tail } | Error::StartupTimeout { stderr_tail } => stderr_tail,
+        other => panic!("expected startup failure with diagnostics: {other:?}"),
+    };
+    assert!(tail.contains("fatal startup detail"), "diagnostic tail: {tail}");
+    manager.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn core_logs_are_archived_and_flushed_on_shutdown() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
+    let source = root.join("archive.yaml");
+    tokio::fs::write(
+        &source,
+        format!("external-controller: {}\n", free_controller_address()),
+    )
+    .await
+    .unwrap();
+    let manager = CoreManager::new(ManagerOptions {
+        runtime_dir: Some(root.join("runtime")),
+        ..ManagerOptions::default()
+    })
+    .await
+    .unwrap();
+    let log_dir = manager.log_dir().unwrap().to_owned();
+    manager.start(fake_core_spec(&root, source)).await.unwrap();
+    manager.shutdown().await.unwrap();
+
+    let mut archived = String::new();
+    for entry in std::fs::read_dir(log_dir).unwrap() {
+        let entry = entry.unwrap();
+        if entry.path().extension().is_some_and(|extension| extension == "jsonl") {
+            archived.push_str(&std::fs::read_to_string(entry.path()).unwrap());
+        }
+    }
+    assert!(archived.contains("fake core started"), "archive: {archived}");
+    assert!(archived.contains("\"t\":\"log\""), "archive: {archived}");
+}
+
+#[tokio::test]
+async fn source_mutation_during_preflight_cannot_change_the_apply() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
+    let controller = free_controller_address();
+    let initial = root.join("initial.yaml");
+    tokio::fs::write(&initial, format!("external-controller: {controller}\n"))
+        .await
+        .unwrap();
+    let manager = CoreManager::new(ManagerOptions {
+        runtime_dir: Some(root.join("runtime")),
+        ..ManagerOptions::default()
+    })
+    .await
+    .unwrap();
+    manager.start(fake_core_spec(&root, initial)).await.unwrap();
+    let expected = manager.status().revision.unwrap().id();
+
+    let desired = root.join("desired.yaml");
+    let marker = root.join("check-started");
+    tokio::fs::write(
+        &desired,
+        format!(
+            "external-controller: {controller}\ncheck-started-file: '{}'\ncheck-delay-ms: 300\n",
+            marker
+        ),
+    )
+    .await
+    .unwrap();
+    let desired_spec = fake_core_spec(&root, desired.clone());
+    let apply = manager.apply_config(desired_spec, Some(expected));
+    let mutate = async {
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if tokio::fs::try_exists(&marker).await.unwrap() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        tokio::fs::write(
+            &desired,
+            format!("external-controller: {controller}\nfinish: true\n"),
+        )
+        .await
+        .unwrap();
+    };
+    let (outcome, ()) = tokio::join!(apply, mutate);
+    let outcome = outcome.unwrap();
+    assert!(matches!(outcome, ApplyOutcome::Switched { .. } | ApplyOutcome::Restarted { .. }));
+    assert!(matches!(manager.status().state, CoreState::Running { .. }));
+    manager.shutdown().await.unwrap();
 }
 
 #[tokio::test]

@@ -1,5 +1,9 @@
 //! Immutable YAML snapshots and deterministic controller preparation.
 
+mod diff;
+pub(crate) mod mihomo;
+pub mod runtime_store;
+
 use camino::{Utf8Path, Utf8PathBuf};
 use enumset::EnumSet;
 use serde_yaml_ng::{Mapping, Value};
@@ -24,7 +28,9 @@ pub(crate) struct ConfigSnapshot {
 #[derive(Debug, Clone)]
 pub(crate) struct PreparedConfig {
     pub bytes: Vec<u8>,
+    pub document: Mapping,
     pub controller: ResolvedController,
+    pub rewrote_controller: bool,
     pub source_hash: String,
     pub effective_hash: String,
 }
@@ -37,10 +43,20 @@ impl ConfigSnapshot {
 
     fn from_bytes(source_path: Utf8PathBuf, raw: &[u8]) -> Result<Self, Error> {
         let value: Value = serde_yaml_ng::from_slice(raw)?;
-        let Value::Mapping(document) = canonicalize(value)? else {
+        let Value::Mapping(document) = value else {
             return Err(Error::InvalidConfig(
                 "top-level YAML document must be a mapping".into(),
             ));
+        };
+        Self::from_document(source_path, document)
+    }
+
+    pub(crate) fn from_document(
+        source_path: Utf8PathBuf,
+        document: Mapping,
+    ) -> Result<Self, Error> {
+        let Value::Mapping(document) = canonicalize(Value::Mapping(document))? else {
+            unreachable!("canonical mapping stays a mapping")
         };
         let bytes = serialize_mapping(&document)?;
         Ok(Self {
@@ -54,6 +70,10 @@ impl ConfigSnapshot {
         &self.source_path
     }
 
+    pub(crate) fn document(&self) -> &Mapping {
+        &self.document
+    }
+
     pub(crate) fn prepare(
         &self,
         controller_template: Option<&str>,
@@ -61,7 +81,31 @@ impl ConfigSnapshot {
         epoch: u64,
         runtime: EnumSet<RuntimeFeature>,
     ) -> Result<PreparedConfig, Error> {
+        self.prepare_inner(controller_template, runtime_dir, epoch, runtime, false)
+    }
+
+    pub(crate) fn prepare_bootstrap(
+        &self,
+        controller_template: Option<&str>,
+        runtime_dir: &Utf8Path,
+        epoch: u64,
+        runtime: EnumSet<RuntimeFeature>,
+    ) -> Result<PreparedConfig, Error> {
+        self.prepare_inner(controller_template, runtime_dir, epoch, runtime, true)
+    }
+
+    fn prepare_inner(
+        &self,
+        controller_template: Option<&str>,
+        runtime_dir: &Utf8Path,
+        epoch: u64,
+        runtime: EnumSet<RuntimeFeature>,
+        zero_inbounds: bool,
+    ) -> Result<PreparedConfig, Error> {
         let mut document = self.document.clone();
+        if zero_inbounds {
+            mihomo::zero_inbounds(&mut document);
+        }
         let local = runtime.contains(RuntimeFeature::LocalIpc);
         if local {
             rewrite_managed_controller(
@@ -78,7 +122,9 @@ impl ConfigSnapshot {
             effective_hash: semantic_hash(&bytes),
             source_hash: self.source_hash.clone(),
             bytes,
+            document,
             controller,
+            rewrote_controller: local,
         })
     }
 }
@@ -117,7 +163,7 @@ fn rewrite_managed_controller(document: &mut Mapping, endpoint: String) {
     document.insert(Value::String(field.to_owned()), Value::String(endpoint));
 }
 
-fn managed_endpoint_path(
+pub(crate) fn managed_endpoint_path(
     runtime_dir: &Utf8Path,
     template: Option<&str>,
     epoch: u64,
@@ -131,15 +177,8 @@ fn managed_endpoint_path(
         let endpoint = template.replace("{epoch}", &epoch.to_string());
         #[cfg(windows)]
         return Ok(endpoint);
-        #[cfg(not(windows))]
-        {
-            let endpoint = Utf8Path::new(&endpoint);
-            return Ok(if endpoint.is_absolute() {
-                endpoint.to_string()
-            } else {
-                runtime_dir.join(endpoint).to_string()
-            });
-        }
+        #[cfg(unix)]
+        return managed_unix_endpoint(runtime_dir, &endpoint);
     }
     #[cfg(windows)]
     {
@@ -150,6 +189,36 @@ fn managed_endpoint_path(
     {
         Ok(runtime_dir.join(format!("core-{epoch}.sock")).to_string())
     }
+}
+
+#[cfg(unix)]
+fn managed_unix_endpoint(runtime_dir: &Utf8Path, endpoint: &str) -> Result<String, Error> {
+    let endpoint = Utf8Path::new(endpoint);
+    let candidate = if endpoint.is_absolute() {
+        endpoint.to_owned()
+    } else {
+        runtime_dir.join(endpoint)
+    };
+    let parent = candidate.parent().ok_or_else(|| {
+        Error::InvalidManagerOptions("managed Unix controller has no parent directory".into())
+    })?;
+    let canonical_parent = std::fs::canonicalize(parent).map_err(|error| {
+        Error::InvalidManagerOptions(format!(
+            "managed Unix controller parent `{parent}` cannot be canonicalized: {error}"
+        ))
+    })?;
+    let canonical_parent = Utf8PathBuf::from_path_buf(canonical_parent).map_err(|_| {
+        Error::InvalidManagerOptions("managed Unix controller path is not UTF-8".into())
+    })?;
+    if !canonical_parent.starts_with(runtime_dir) {
+        return Err(Error::InvalidManagerOptions(format!(
+            "managed Unix controller `{candidate}` escapes runtime directory `{runtime_dir}`"
+        )));
+    }
+    let file_name = candidate.file_name().ok_or_else(|| {
+        Error::InvalidManagerOptions("managed Unix controller must name a socket file".into())
+    })?;
+    Ok(canonical_parent.join(file_name).to_string())
 }
 
 fn canonicalize(value: Value) -> Result<Value, Error> {

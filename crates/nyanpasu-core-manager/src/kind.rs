@@ -67,6 +67,14 @@ pub async fn check_config(spec: &InstanceSpec) -> Result<(), Error> {
     run_check(spec, CHECK_CONFIG_TIMEOUT).await
 }
 
+#[cfg(feature = "test-hooks")]
+pub async fn check_config_within(
+    spec: &InstanceSpec,
+    timeout: Duration,
+) -> Result<(), Error> {
+    run_check(spec, timeout).await
+}
+
 async fn run_check(spec: &InstanceSpec, timeout: Duration) -> Result<(), Error> {
     let config_dir = spec
         .config_path

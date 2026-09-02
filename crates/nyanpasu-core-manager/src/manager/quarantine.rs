@@ -32,19 +32,13 @@ impl CoreManager {
         if ctrl.quarantine.is_empty() {
             return Ok(());
         }
-        let runtime_dir = self
-            .inner
-            .options
-            .runtime_dir
-            .as_ref()
-            .expect("validated runtime directory")
-            .clone();
+        let runtime_dir = self.inner.store.dir();
         let quarantined = ctrl.quarantine.clone();
         let mut failures = Vec::new();
 
         for entry in quarantined {
             if !entry.death_proven {
-                let pid_path = runtime_dir.join(format!("core-{}.pid", entry.epoch));
+                let pid_path = self.inner.store.pid_path(entry.epoch);
                 match reap_epoch_pid_file(pid_path.as_std_path(), runtime_dir.as_std_path()).await {
                     Ok(OrphanReapOutcome::AlreadyExited | OrphanReapOutcome::Killed) => {
                         if let Some(current) = ctrl
@@ -69,7 +63,7 @@ impl CoreManager {
                 }
             }
 
-            if let Err(error) = cleanup_quarantined_epoch(&runtime_dir, entry.epoch).await {
+            if let Err(error) = self.inner.store.cleanup_epoch(entry.epoch).await {
                 failures.push(format!(
                     "epoch {}: artifact cleanup failed: {error}",
                     entry.epoch
@@ -133,24 +127,6 @@ fn quarantine_error(ctrl: &Ctrl) -> Option<Error> {
         epoch: first.epoch,
         reason,
     })
-}
-
-async fn cleanup_quarantined_epoch(
-    runtime_dir: &camino::Utf8Path,
-    epoch: u64,
-) -> Result<(), Error> {
-    for path in [
-        runtime_dir.join(format!("config-{epoch}.yaml")),
-        runtime_dir.join(format!("core-{epoch}.pid")),
-        runtime_dir.join(format!("core-{epoch}.sock")),
-    ] {
-        match tokio::fs::remove_file(path).await {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]

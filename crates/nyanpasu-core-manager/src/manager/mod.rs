@@ -1,25 +1,29 @@
 //! Cross-epoch orchestration and atomic status publication.
 
 mod quarantine;
+mod reconcile;
+mod switching;
 
-use std::{
-    collections::BTreeSet,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
-    time::{SystemTime, UNIX_EPOCH},
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
 };
-
-use tokio::io::AsyncWriteExt;
 
 use tokio::sync::{broadcast, watch};
 
 use crate::{
-    Error, Instance, LogFrame, ProbeHandle,
+    Error, LogFrame, ProbeHandle,
     capability::{ResolvedFeatures, VersionCache, resolve_features},
-    config::ConfigSnapshot,
-    spec::{CoreSpec, InstanceSpec, ManagerOptions},
+    config::{
+        ConfigSnapshot,
+        runtime_store::{RuntimeConfigStore, RuntimeDirectoryLock},
+    },
+    log_sink::{self, SinkHandle, SinkOptions},
+    runtime::{
+        RuntimeBackend, RuntimeInstance, RuntimeLaunchRequest,
+        process::{ProbePlan, ProcessRuntimeBackend},
+    },
+    spec::{CoreSpec, InstanceSpec, LocalIpcPolicy, ManagerOptions},
     state::{
         ConfigRevision, CoreState, CoreStatus, InstanceState, SpecSummary, StopReason, now_ms,
     },
@@ -48,6 +52,7 @@ pub enum SwitchOutcome {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApplyOutcome {
+    Started { revision: ConfigRevision },
     Noop { revision: ConfigRevision },
     Patched { revision: ConfigRevision },
     Reloaded { revision: ConfigRevision },
@@ -70,20 +75,18 @@ pub struct CoreManager {
 pub struct CoreManagerBuilder {
     options: ManagerOptions,
     probes: ProbePlan,
-}
-
-#[derive(Clone, Default)]
-struct ProbePlan {
-    readiness: Option<ProbeHandle>,
-    liveness: Option<ProbeHandle>,
-    liveness_with_readiness: bool,
+    backend: Option<Arc<dyn RuntimeBackend>>,
 }
 
 struct Inner {
     options: ManagerOptions,
-    probes: ProbePlan,
+    backend: Arc<dyn RuntimeBackend>,
+    store: RuntimeConfigStore,
+    _runtime_lock: RuntimeDirectoryLock,
     status_tx: watch::Sender<CoreStatus>,
-    log_tx: broadcast::Sender<LogFrame>,
+    log_tx: broadcast::Sender<Arc<LogFrame>>,
+    log_dir: Option<camino::Utf8PathBuf>,
+    log_sink: tokio::sync::Mutex<Option<SinkHandle>>,
     version_cache: VersionCache,
     operation: tokio::sync::Mutex<()>,
     ctrl: tokio::sync::Mutex<Ctrl>,
@@ -93,6 +96,7 @@ struct Inner {
 #[derive(Default)]
 struct Ctrl {
     current: Option<Active>,
+    last_spec: Option<InstanceSpec>,
     quarantine: Vec<QuarantinedEpoch>,
 }
 
@@ -104,9 +108,13 @@ struct QuarantinedEpoch {
 }
 
 struct Active {
-    instance: Instance,
+    instance: Box<dyn RuntimeInstance>,
     forwarder: tokio::task::JoinHandle<()>,
     source_spec: InstanceSpec,
+    capabilities: Vec<crate::Feature>,
+    runtime_features: Vec<crate::RuntimeFeature>,
+    source_document: serde_yaml_ng::Mapping,
+    effective_document: serde_yaml_ng::Mapping,
     revision: ConfigRevision,
 }
 
@@ -128,6 +136,11 @@ impl CoreManagerBuilder {
         self
     }
 
+    pub fn runtime_backend(mut self, backend: Arc<dyn RuntimeBackend>) -> Self {
+        self.backend = Some(backend);
+        self
+    }
+
     pub async fn build(self) -> Result<CoreManager, Error> {
         CoreManager::build_configured(self).await
     }
@@ -138,6 +151,7 @@ impl CoreManager {
         CoreManagerBuilder {
             options,
             probes: ProbePlan::default(),
+            backend: None,
         }
     }
 
@@ -146,7 +160,11 @@ impl CoreManager {
     }
 
     async fn build_configured(builder: CoreManagerBuilder) -> Result<Self, Error> {
-        let CoreManagerBuilder { options, probes } = builder;
+        let CoreManagerBuilder {
+            options,
+            probes,
+            backend,
+        } = builder;
         let runtime_dir = options
             .runtime_dir
             .as_ref()
@@ -170,15 +188,58 @@ impl CoreManager {
                 )));
             }
         }
-        tokio::fs::create_dir_all(&runtime_dir).await?;
-        let max_epoch = sweep_orphans(&runtime_dir).await?;
+        if options.log_max_bytes == 0 {
+            return Err(Error::InvalidManagerOptions(
+                "log_max_bytes must be greater than zero".into(),
+            ));
+        }
+        if options.log_max_files == 0 {
+            return Err(Error::InvalidManagerOptions(
+                "log_max_files must be greater than zero".into(),
+            ));
+        }
+        let store = RuntimeConfigStore::new(runtime_dir.clone()).await?;
+        let runtime_lock = store.acquire_ownership().await?;
+        crate::config::managed_endpoint_path(
+            store.dir(),
+            options.controller_template.as_deref(),
+            0,
+        )?;
+        let max_epoch = sweep_orphans(&store).await?;
         let (status_tx, _) = watch::channel(CoreStatus::initial());
+        let (log_tx, _) = broadcast::channel(crate::log::LOG_CHANNEL_CAPACITY);
+        let (log_dir, log_sink) = if options.log_sink_enabled {
+            let dir = log_sink::prepare_dir(store.dir()).await?;
+            let handle = log_sink::spawn(
+                dir.clone(),
+                SinkOptions {
+                    max_bytes: options.log_max_bytes,
+                    max_files: options.log_max_files,
+                },
+                log_tx.subscribe(),
+                options.cancel_token.child_token(),
+            )
+            .await?;
+            (Some(dir), Some(handle))
+        } else {
+            (None, None)
+        };
+        let backend = backend.unwrap_or_else(|| {
+            Arc::new(ProcessRuntimeBackend::new(
+                probes,
+                options.cancel_token.clone(),
+            ))
+        });
         Ok(Self {
             inner: Arc::new(Inner {
                 options,
-                probes,
+                backend,
+                store,
+                _runtime_lock: runtime_lock,
                 status_tx,
-                log_tx: broadcast::channel(crate::log::LOG_CHANNEL_CAPACITY).0,
+                log_tx,
+                log_dir,
+                log_sink: tokio::sync::Mutex::new(log_sink),
                 version_cache: VersionCache::default(),
                 operation: tokio::sync::Mutex::new(()),
                 ctrl: tokio::sync::Mutex::new(Ctrl::default()),
@@ -195,8 +256,17 @@ impl CoreManager {
         self.inner.status_tx.borrow().clone()
     }
 
-    pub fn subscribe_logs(&self) -> broadcast::Receiver<LogFrame> {
+    pub fn subscribe_logs(&self) -> broadcast::Receiver<Arc<LogFrame>> {
         self.inner.log_tx.subscribe()
+    }
+
+    pub fn log_dir(&self) -> Option<&camino::Utf8Path> {
+        self.inner.log_dir.as_deref()
+    }
+
+    #[cfg(feature = "test-hooks")]
+    pub fn inject_runtime_parent_sync_failure_once_for_test(&self) {
+        self.inner.store.inject_replace_parent_sync_failure_once();
     }
 
     pub async fn start(&self, spec: InstanceSpec) -> Result<(), Error> {
@@ -205,48 +275,60 @@ impl CoreManager {
     }
 
     async fn start_inner(&self, spec: InstanceSpec) -> Result<(), Error> {
+        let snapshot = ConfigSnapshot::load(&spec.config_path).await?;
+        self.start_inner_with_snapshot(spec, snapshot).await
+    }
+
+    async fn start_inner_with_snapshot(
+        &self,
+        spec: InstanceSpec,
+        snapshot: ConfigSnapshot,
+    ) -> Result<(), Error> {
         let mut ctrl = self.inner.ctrl.lock().await;
         reject_quarantine(&ctrl)?;
         if ctrl
             .current
             .as_ref()
-            .is_some_and(|active| !active.instance.status().state.is_terminal())
+            .is_some_and(|active| !active.instance.state().borrow().state.is_terminal())
         {
             return Err(Error::AlreadyRunning);
         }
         if let Some(stale) = ctrl.current.take() {
             let epoch = stale.revision.epoch;
             abort_and_await(stale.forwarder).await;
-            if let Err(error) = stale.instance.stop().await {
+            if let Err(error) = stale
+                .instance
+                .stop_and_confirm_dead(self.inner.options.stop_timeout)
+                .await
+            {
                 self.latch_quarantine(&mut ctrl, epoch, &error);
                 return Err(error);
             }
-            cleanup_epoch(&stale.revision).await;
+            self.inner.store.cleanup_epoch(epoch).await?;
         }
 
         let epoch = self.inner.epoch.fetch_add(1, Ordering::SeqCst) + 1;
         let resolved = self.resolve_core_features(&spec.core).await?;
-        let runtime_dir = self
-            .inner
-            .options
-            .runtime_dir
-            .as_ref()
-            .expect("validated runtime directory");
-        tokio::fs::create_dir_all(runtime_dir).await?;
-        let snapshot = ConfigSnapshot::load(&spec.config_path).await?;
+        let runtime_dir = self.inner.store.dir();
         let source_path = snapshot.source_path().to_owned();
+        let source_document = snapshot.document().clone();
         let prepared = snapshot.prepare(
             self.inner.options.controller_template.as_deref(),
             runtime_dir,
             epoch,
             resolved.runtime,
         )?;
-        let runtime_path = runtime_dir.join(format!("config-{epoch}.yaml"));
-        publish_runtime_config(&runtime_path, &prepared.bytes).await?;
+        self.warn_http_fallback(
+            &spec.core,
+            resolved.version.as_deref(),
+            prepared.rewrote_controller,
+        );
+        let staged = self.inner.store.stage(epoch, &prepared.bytes).await?;
+        let runtime_path = self.inner.store.commit_new(staged, epoch).await?;
 
         let mut effective_spec = spec.clone();
         effective_spec.config_path = runtime_path.clone();
-        effective_spec.pid_file = Some(runtime_dir.join(format!("core-{epoch}.pid")));
+        effective_spec.pid_file = Some(self.inner.store.pid_path(epoch));
         if effective_spec.core.version.is_none() {
             effective_spec.core.version = resolved.version.clone();
         }
@@ -266,8 +348,8 @@ impl CoreManager {
             runtime_features: runtime_features.clone(),
         };
 
-        if let Err(error) = crate::kind::check_config(&effective_spec).await {
-            cleanup_epoch(&revision).await;
+        if let Err(error) = self.inner.backend.check_config(&effective_spec).await {
+            let _ = self.inner.store.cleanup_epoch(epoch).await;
             self.inner.publish(
                 CoreState::Stopped {
                     reason: Some(StopReason::Error(error.to_string())),
@@ -287,25 +369,20 @@ impl CoreManager {
             Some(revision.clone()),
         );
 
-        let mut builder = Instance::builder(
-            effective_spec,
-            epoch,
-            prepared.controller,
-            self.inner.options.cancel_token.clone(),
-        );
-        if let Some(probe) = self.inner.probes.readiness.clone() {
-            builder = builder.readiness_probe(probe);
-        }
-        if let Some(probe) = self.inner.probes.liveness.clone() {
-            builder = builder.liveness_probe(probe);
-        } else if self.inner.probes.liveness_with_readiness {
-            builder = builder.liveness_with_readiness_probe();
-        }
-        builder = builder.log_sender(self.inner.log_tx.clone());
-        let instance = match builder.spawn().await {
+        let instance = match self
+            .inner
+            .backend
+            .launch(RuntimeLaunchRequest {
+                effective_spec,
+                epoch,
+                controller: prepared.controller,
+                log_tx: self.inner.log_tx.clone(),
+            })
+            .await
+        {
             Ok(instance) => instance,
             Err(error) => {
-                cleanup_epoch(&revision).await;
+                let _ = self.inner.store.cleanup_epoch(epoch).await;
                 self.inner.publish(
                     CoreState::Stopped {
                         reason: Some(StopReason::Error(error.to_string())),
@@ -318,13 +395,41 @@ impl CoreManager {
                 return Err(error);
             }
         };
-        let pid = match instance.status().state {
+        if let Err(readiness_error) = instance.wait_ready().await {
+            match instance
+                .stop_and_confirm_dead(self.inner.options.stop_timeout)
+                .await
+            {
+                Ok(()) => {
+                    let _ = self.inner.store.cleanup_epoch(epoch).await;
+                    self.inner.publish(
+                        CoreState::Stopped {
+                            reason: Some(StopReason::Error(readiness_error.to_string())),
+                        },
+                        None,
+                        None,
+                        None,
+                        None,
+                    );
+                    return Err(readiness_error);
+                }
+                Err(stop_error) => {
+                    let error = Error::StopUnconfirmed(format!(
+                        "{readiness_error}; failed to stop rejected initial instance: {stop_error}"
+                    ));
+                    self.latch_quarantine(&mut ctrl, epoch, &error);
+                    return Err(error);
+                }
+            }
+        }
+        let state = instance.state().borrow().clone();
+        let pid = match state.state {
             InstanceState::Running { pid } => pid,
             _ => 0,
         };
         self.inner.publish(
             CoreState::Running { epoch, pid },
-            instance.status().health,
+            state.health,
             Some(SpecSummary {
                 kind: spec.core.kind,
                 config_path: source_path,
@@ -334,11 +439,16 @@ impl CoreManager {
             Some(instance.controller().host.clone()),
             Some(revision.clone()),
         );
-        let forwarder = spawn_forwarder(self.inner.clone(), instance.subscribe(), epoch);
+        let forwarder = spawn_forwarder(self.inner.clone(), instance.state(), epoch);
+        ctrl.last_spec = Some(spec.clone());
         ctrl.current = Some(Active {
             instance,
             forwarder,
             source_spec: spec,
+            capabilities,
+            runtime_features,
+            source_document,
+            effective_document: prepared.document,
             revision,
         });
         Ok(())
@@ -349,9 +459,20 @@ impl CoreManager {
         self.stop_inner().await
     }
 
+    pub async fn shutdown(&self) -> Result<(), Error> {
+        let _operation = self.inner.operation.lock().await;
+        let result = match self.stop_inner().await {
+            Err(Error::NotStarted) => Ok(()),
+            result => result,
+        };
+        if let Some(sink) = self.inner.log_sink.lock().await.take() {
+            sink.shutdown().await;
+        }
+        result
+    }
+
     async fn stop_inner(&self) -> Result<(), Error> {
         let mut ctrl = self.inner.ctrl.lock().await;
-        reject_quarantine(&ctrl)?;
         let Some(active) = ctrl.current.take() else {
             return Err(Error::NotStarted);
         };
@@ -361,11 +482,15 @@ impl CoreManager {
             status.state = CoreState::Stopping { epoch };
             status.changed_at = now_ms();
         });
-        if let Err(error) = active.instance.stop().await {
+        if let Err(error) = active
+            .instance
+            .stop_and_confirm_dead(self.inner.options.stop_timeout)
+            .await
+        {
             self.latch_quarantine(&mut ctrl, epoch, &error);
             return Err(error);
         }
-        cleanup_epoch(&active.revision).await;
+        self.inner.store.cleanup_epoch(epoch).await?;
         self.inner.publish(
             CoreState::Stopped {
                 reason: Some(StopReason::User),
@@ -379,39 +504,44 @@ impl CoreManager {
     }
 
     /// Restart the last requested spec as a new epoch.
-    ///
-    /// This currently performs the hard-switch path. HTTP controllers cannot
-    /// overlap; local non-Mihomo cores are also hard-switched. Local Mihomo
-    /// reports `PatchFailed` until graceful overlap preparation is migrated.
     pub async fn restart(&self) -> Result<SwitchOutcome, Error> {
         let _operation = self.inner.operation.lock().await;
-        let (spec, reason) = {
+        let spec = {
             let ctrl = self.inner.ctrl.lock().await;
             reject_quarantine(&ctrl)?;
-            let active = ctrl.current.as_ref().ok_or(Error::NotStarted)?;
-            (active.source_spec.clone(), hard_restart_reason(active))
+            ctrl.current
+                .as_ref()
+                .map(|active| active.source_spec.clone())
+                .or_else(|| ctrl.last_spec.clone())
+                .ok_or(Error::NotStarted)?
         };
-        self.stop_inner().await?;
-        self.start_inner(spec).await?;
-        Ok(SwitchOutcome::Hard { reason })
+        self.switch_inner(spec).await
     }
 
     /// Apply a desired config with optimistic revision checking.
     ///
-    /// In-place patch/reload classification is still pending. Non-noop changes
-    /// use a checked hard restart; if the desired epoch fails to start, the
-    /// previous source spec is started again and reported as `RolledBack`.
+    /// Mihomo changes are classified deny-by-default. Safe controller patches
+    /// and reloads stay on the current epoch; everything else falls back to the
+    /// checked restart/rollback path.
     pub async fn apply_config(
         &self,
         input: InstanceSpec,
         expected_revision: Option<crate::RevisionId>,
     ) -> Result<ApplyOutcome, Error> {
         let _operation = self.inner.operation.lock().await;
-        let (previous_spec, previous_revision) = {
+        self.apply_config_inner(input, expected_revision).await
+    }
+
+    async fn apply_config_inner(
+        &self,
+        input: InstanceSpec,
+        expected_revision: Option<crate::RevisionId>,
+    ) -> Result<ApplyOutcome, Error> {
+        let (previous_spec, previous_revision, current_source, current_effective) = {
             let ctrl = self.inner.ctrl.lock().await;
             reject_quarantine(&ctrl)?;
             let active = ctrl.current.as_ref().ok_or(Error::NotStarted)?;
-            if active.instance.status().state.is_terminal() {
+            if active.instance.state().borrow().state.is_terminal() {
                 return Err(Error::NotStarted);
             }
             let actual = active.revision.id();
@@ -423,49 +553,181 @@ impl CoreManager {
                     actual: Some(actual),
                 });
             }
-            (active.source_spec.clone(), active.revision.clone())
+            (
+                active.source_spec.clone(),
+                active.revision.clone(),
+                active.source_document.clone(),
+                active.effective_document.clone(),
+            )
         };
 
         let resolved = self.resolve_core_features(&input.core).await?;
-        let runtime_dir = self
-            .inner
-            .options
-            .runtime_dir
-            .as_ref()
-            .expect("validated runtime directory");
         let snapshot = ConfigSnapshot::load(&input.config_path).await?;
+        let previous_snapshot = ConfigSnapshot::from_document(
+            previous_spec.config_path.clone(),
+            current_source.clone(),
+        )?;
         let candidate = snapshot.prepare(
             self.inner.options.controller_template.as_deref(),
-            runtime_dir,
+            self.inner.store.dir(),
             previous_revision.epoch,
             resolved.runtime,
         )?;
-        if input == previous_spec
-            && candidate.source_hash == previous_revision.source_hash
-            && candidate.effective_hash == previous_revision.effective_hash
-        {
+        self.warn_http_fallback(
+            &input.core,
+            resolved.version.as_deref(),
+            candidate.rewrote_controller,
+        );
+        let change = crate::config::mihomo::classify(
+            &current_source,
+            &current_effective,
+            &previous_spec,
+            snapshot.document(),
+            &candidate.document,
+            &input,
+        )?;
+        if matches!(change, crate::config::mihomo::ConfigChange::Noop) {
             return Ok(ApplyOutcome::Noop {
                 revision: previous_revision,
             });
         }
 
-        // Reject invalid desired input before taking the active core down.
-        crate::kind::check_config(&input).await?;
-        let switched = process_spec_changed(&previous_spec, &input);
+        // Freeze the desired effective config before validation. The source path
+        // can change concurrently; checking and later committing this staged
+        // file guarantees the exact same bytes are validated and applied.
+        let staged = self
+            .inner
+            .store
+            .stage(previous_revision.epoch, &candidate.bytes)
+            .await?;
+        let mut check_spec = input.clone();
+        check_spec.config_path = staged.path().to_owned();
+        self.inner.backend.check_config(&check_spec).await?;
+        let mut durability_warnings = Vec::new();
+        if matches!(
+            change,
+            crate::config::mihomo::ConfigChange::Patch { .. }
+                | crate::config::mihomo::ConfigChange::Reload
+        ) {
+            let backup = self
+                .inner
+                .store
+                .backup(previous_revision.epoch, previous_revision.generation + 1)
+                .await?;
+            let commit = match self
+                .inner
+                .store
+                .commit_replace(staged, previous_revision.epoch)
+                .await
+            {
+                Ok(commit) => commit,
+                Err(error) => {
+                    if let Err(cleanup) = self.inner.store.remove_backup(backup).await {
+                        tracing::warn!("failed to remove apply backup after commit failure: {cleanup}");
+                    }
+                    return Err(error);
+                }
+            };
+            if let Some(warning) = commit.durability_warning() {
+                durability_warnings.push(warning.to_owned());
+            }
+            let reconciled = match tokio::time::timeout(
+                self.inner.options.reconcile_timeout,
+                async {
+                    let ctrl = self.inner.ctrl.lock().await;
+                    let active = ctrl.current.as_ref().ok_or(Error::NotStarted)?;
+                    Ok::<bool, Error>(
+                        reconcile::reconcile_in_place(
+                            active,
+                            &change,
+                            &previous_revision.runtime_path,
+                            self.inner.options.control_timeout,
+                        )
+                        .await,
+                    )
+                },
+            )
+            .await
+            {
+                Ok(result) => result?,
+                Err(_) => {
+                    tracing::warn!("in-place reconciliation timed out; falling back to restart");
+                    false
+                }
+            };
+            if reconciled {
+                let mut revision = previous_revision.clone();
+                revision.generation += 1;
+                revision.source_hash = candidate.source_hash;
+                revision.effective_hash = candidate.effective_hash;
+                let outcome = match change {
+                    crate::config::mihomo::ConfigChange::Patch { .. } => ApplyOutcome::Patched {
+                        revision: revision.clone(),
+                    },
+                    crate::config::mihomo::ConfigChange::Reload => ApplyOutcome::Reloaded {
+                        revision: revision.clone(),
+                    },
+                    _ => unreachable!(),
+                };
+                let mut ctrl = self.inner.ctrl.lock().await;
+                let committed_spec = {
+                    let active = ctrl.current.as_mut().ok_or(Error::NotStarted)?;
+                    active.source_spec = input.clone();
+                    active.source_document = snapshot.document().clone();
+                    active.effective_document = candidate.document;
+                    active.revision = revision.clone();
+                    active.source_spec.clone()
+                };
+                ctrl.last_spec = Some(committed_spec);
+                self.inner.status_tx.send_modify(|status| {
+                    status.revision = Some(revision.clone());
+                    if let Some(spec) = status.spec.as_mut() {
+                        spec.config_path = input.config_path.clone();
+                    }
+                });
+                if let Err(error) = self.inner.store.remove_backup(backup).await {
+                    tracing::warn!("failed to remove successful apply backup: {error}");
+                }
+                return Ok(wrap_apply_warnings(outcome, &durability_warnings));
+            }
+            let restore = self.inner.store.restore(&backup).await.map_err(|error| {
+                Error::ApplyRollbackFailed {
+                    apply: "in-place reconciliation failed".into(),
+                    rollback: format!("runtime restore failed: {error}"),
+                }
+            })?;
+            if let Some(warning) = restore.durability_warning() {
+                durability_warnings.push(warning.to_owned());
+            }
+            if let Err(error) = self.inner.store.remove_backup(backup).await {
+                tracing::warn!("failed to remove restored apply backup: {error}");
+            }
+        } else {
+            drop(staged);
+        }
+
+        let switched = matches!(change, crate::config::mihomo::ConfigChange::Switch);
         self.stop_inner().await?;
-        match self.start_inner(input.clone()).await {
+        match self
+            .start_inner_with_snapshot(input.clone(), snapshot)
+            .await
+        {
             Ok(()) => {
                 let revision = self
                     .status()
                     .revision
                     .ok_or_else(|| Error::ApplyFailed("started epoch has no revision".into()))?;
-                Ok(if switched {
+                let outcome = if switched {
                     ApplyOutcome::Switched { revision }
                 } else {
                     ApplyOutcome::Restarted { revision }
-                })
+                };
+                Ok(wrap_apply_warnings(outcome, &durability_warnings))
             }
-            Err(apply_error) => match self.start_inner(previous_spec).await {
+            Err(apply_error) => match self
+                .start_inner_with_snapshot(previous_spec, previous_snapshot)
+                .await
+            {
                 Ok(()) => {
                     let revision = self.status().revision.ok_or_else(|| {
                         Error::ApplyRollbackFailed {
@@ -473,10 +735,13 @@ impl CoreManager {
                             rollback: "rollback epoch has no revision".into(),
                         }
                     })?;
-                    Ok(ApplyOutcome::RolledBack {
-                        revision,
-                        failed_apply: apply_error.to_string(),
-                    })
+                    Ok(wrap_apply_warnings(
+                        ApplyOutcome::RolledBack {
+                            revision,
+                            failed_apply: apply_error.to_string(),
+                        },
+                        &durability_warnings,
+                    ))
                 }
                 Err(rollback_error) => Err(Error::ApplyRollbackFailed {
                     apply: apply_error.to_string(),
@@ -486,36 +751,88 @@ impl CoreManager {
         }
     }
 
-    /// Switch to a requested spec as a new epoch.
+    /// Converge the runtime toward the requested spec.
     ///
-    /// The graceful-overlap path is still pending; this method currently
-    /// provides the target API with a deterministic hard-switch fallback.
-    pub async fn switch(&self, spec: InstanceSpec) -> Result<SwitchOutcome, Error> {
+    /// This is the desired-state entry used by the v2 control plane: callers
+    /// do not choose start/reload/restart/switch. The manager derives the
+    /// transition from the current runtime and the requested configuration.
+    pub async fn reconcile(
+        &self,
+        spec: InstanceSpec,
+        expected_applied: Option<crate::RevisionId>,
+    ) -> Result<ApplyOutcome, Error> {
         let _operation = self.inner.operation.lock().await;
-        let reason = {
+        let running = {
             let ctrl = self.inner.ctrl.lock().await;
             reject_quarantine(&ctrl)?;
-            match ctrl.current.as_ref() {
-                Some(active) if !active.instance.status().state.is_terminal() => {
-                    hard_switch_reason(active, &spec)
-                }
-                _ => DegradeReason::NotRunning,
-            }
+            ctrl.current.as_ref().is_some_and(|active| {
+                !active.instance.state().borrow().state.is_terminal()
+            })
         };
-        if reason != DegradeReason::NotRunning {
-            self.stop_inner().await?;
-        } else {
-            let stale_exists = self.inner.ctrl.lock().await.current.is_some();
+        if running {
+            return self.apply_config_inner(spec, expected_applied).await;
+        }
+        if let Some(expected) = expected_applied {
+            return Err(Error::RevisionConflict {
+                expected,
+                actual: None,
+            });
+        }
+        self.start_inner(spec).await?;
+        let revision = self
+            .status()
+            .revision
+            .ok_or_else(|| Error::ApplyFailed("started epoch has no revision".into()))?;
+        Ok(ApplyOutcome::Started { revision })
+    }
+
+    /// Switch to a requested spec as a new epoch.
+    pub async fn switch(&self, spec: InstanceSpec) -> Result<SwitchOutcome, Error> {
+        let _operation = self.inner.operation.lock().await;
+        self.switch_inner(spec).await
+    }
+
+    async fn switch_inner(&self, spec: InstanceSpec) -> Result<SwitchOutcome, Error> {
+        let (running, stale_exists) = {
+            let ctrl = self.inner.ctrl.lock().await;
+            reject_quarantine(&ctrl)?;
+            (
+                ctrl.current
+                    .as_ref()
+                    .is_some_and(|active| !active.instance.state().borrow().state.is_terminal()),
+                ctrl.current.is_some(),
+            )
+        };
+        if !running {
             if stale_exists {
                 self.stop_inner().await?;
             }
+            self.start_inner(spec).await?;
+            return Ok(SwitchOutcome::Hard {
+                reason: DegradeReason::NotRunning,
+            });
         }
-        self.start_inner(spec).await?;
-        Ok(SwitchOutcome::Hard { reason })
+
+        let snapshot = ConfigSnapshot::load(&spec.config_path).await?;
+        let resolved = self.resolve_core_features(&spec.core).await?;
+        let local_controller = resolved
+            .runtime
+            .contains(crate::RuntimeFeature::LocalIpc);
+        let reason = switching::graceful_degrade_reason(
+            local_controller,
+            spec.core.kind,
+            crate::config::mihomo::overlap_block(snapshot.document()),
+        );
+        if let Some(reason) = reason {
+            self.stop_inner().await?;
+            self.start_inner(spec).await?;
+            return Ok(SwitchOutcome::Hard { reason });
+        }
+        self.graceful_switch(spec, snapshot, resolved).await
     }
 
     /// Run one serialized reconciliation probe against the active epoch.
-    pub async fn reconcile(&self) -> Result<crate::ProbeResult, Error> {
+    pub async fn probe_reconcile(&self) -> Result<crate::ProbeResult, Error> {
         let _operation = self.inner.operation.lock().await;
         let ctrl = self.inner.ctrl.lock().await;
         reject_quarantine(&ctrl)?;
@@ -526,7 +843,22 @@ impl CoreManager {
     /// Validate a config with the selected core binary without changing the
     /// manager's current state.
     pub async fn check_config(&self, spec: &crate::spec::InstanceSpec) -> Result<(), Error> {
-        crate::kind::check_config(spec).await
+        self.inner.backend.check_config(spec).await
+    }
+
+    fn warn_http_fallback(
+        &self,
+        core: &CoreSpec,
+        resolved_version: Option<&str>,
+        rewrote_controller: bool,
+    ) {
+        if self.inner.options.local_ipc_policy == LocalIpcPolicy::Prefer && !rewrote_controller {
+            tracing::warn!(
+                kind = %core.kind,
+                version = resolved_version.or(core.version.as_deref()).unwrap_or("unknown"),
+                "local IPC is unsupported; falling back to the configured HTTP controller"
+            );
+        }
     }
 
     pub(crate) async fn resolve_core_features(
@@ -545,13 +877,16 @@ impl CoreManager {
         &self.inner.options
     }
 
-    pub fn has_custom_readiness_probe(&self) -> bool {
-        self.inner.probes.readiness.is_some()
-    }
+}
 
-    pub fn has_custom_liveness_probe(&self) -> bool {
-        self.inner.probes.liveness.is_some() || self.inner.probes.liveness_with_readiness
+fn wrap_apply_warnings(mut outcome: ApplyOutcome, warnings: &[String]) -> ApplyOutcome {
+    for warning in warnings.iter().rev() {
+        outcome = ApplyOutcome::DurabilityUncertain {
+            outcome: Box::new(outcome),
+            warning: warning.clone(),
+        };
     }
+    outcome
 }
 
 impl Inner {
@@ -564,33 +899,16 @@ impl Inner {
         revision: Option<ConfigRevision>,
     ) {
         self.status_tx.send_modify(|status| {
+            let lifecycle_changed = status.state != state;
             status.state = state.clone();
-            status.changed_at = now_ms();
             status.health = health.clone();
             status.spec = spec.clone();
             status.controller = controller.clone();
             status.revision = revision.clone();
+            if lifecycle_changed {
+                status.changed_at = now_ms();
+            }
         });
-    }
-}
-
-fn process_spec_changed(previous: &InstanceSpec, desired: &InstanceSpec) -> bool {
-    previous.core != desired.core
-        || previous.working_dir != desired.working_dir
-        || previous.options != desired.options
-}
-
-fn hard_restart_reason(active: &Active) -> DegradeReason {
-    hard_switch_reason(active, &active.source_spec)
-}
-
-fn hard_switch_reason(active: &Active, requested: &InstanceSpec) -> DegradeReason {
-    match &active.instance.controller().host {
-        clash_api::Host::Http(_) => DegradeReason::HttpController,
-        _ if !matches!(requested.core.kind, crate::CoreKind::Mihomo) => {
-            DegradeReason::UnsupportedKind
-        }
-        _ => DegradeReason::PatchFailed,
     }
 }
 
@@ -602,10 +920,22 @@ fn spawn_forwarder(
     tokio::spawn(async move {
         while states.changed().await.is_ok() {
             let instance = states.borrow_and_update().clone();
-            inner.status_tx.send_modify(|status| {
-                status.state = map_instance_state(epoch, &instance.state);
-                status.changed_at = now_ms();
+            inner.status_tx.send_if_modified(|status| {
+                if status.revision.as_ref().map(|revision| revision.epoch) != Some(epoch) {
+                    return false;
+                }
+                let next_state = map_instance_state(epoch, &instance.state);
+                let lifecycle_changed = status.state != next_state;
+                let health_changed = status.health != instance.health;
+                if !lifecycle_changed && !health_changed {
+                    return false;
+                }
+                status.state = next_state;
                 status.health = instance.health.clone();
+                if lifecycle_changed {
+                    status.changed_at = now_ms();
+                }
+                true
             });
         }
     })
@@ -626,160 +956,26 @@ fn map_instance_state(epoch: u64, state: &InstanceState) -> CoreState {
     }
 }
 
-async fn sweep_orphans(runtime_dir: &camino::Utf8Path) -> Result<u64, Error> {
-    let mut epochs = BTreeSet::new();
-    let mut entries = tokio::fs::read_dir(runtime_dir).await?;
-    while let Some(entry) = entries.next_entry().await? {
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        for (prefix, suffix) in [
-            ("config-", ".yaml"),
-            ("core-", ".pid"),
-            ("core-", ".sock"),
-        ] {
-            if let Some(epoch) = name
-                .strip_prefix(prefix)
-                .and_then(|value| value.strip_suffix(suffix))
-                .and_then(|value| value.parse::<u64>().ok())
-            {
-                epochs.insert(epoch);
-            }
-        }
-    }
-    let maximum = epochs.iter().next_back().copied().unwrap_or(0);
+async fn sweep_orphans(store: &RuntimeConfigStore) -> Result<u64, Error> {
+    let epochs = store.artifact_epochs().await?;
+    let maximum = epochs.last().copied().unwrap_or(0);
     for epoch in epochs {
-        let pid_path = runtime_dir.join(format!("core-{epoch}.pid"));
+        let pid_path = store.pid_path(epoch);
         if tokio::fs::try_exists(&pid_path).await? {
             nyanpasu_utils::process::reap_epoch_pid_file(
                 pid_path.as_std_path(),
-                runtime_dir.as_std_path(),
+                store.dir().as_std_path(),
             )
             .await?;
         }
-        for path in [
-            runtime_dir.join(format!("config-{epoch}.yaml")),
-            pid_path,
-            runtime_dir.join(format!("core-{epoch}.sock")),
-        ] {
-            match tokio::fs::remove_file(path).await {
-                Ok(()) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => return Err(error.into()),
-            }
-        }
+        store.cleanup_epoch(epoch).await?;
     }
     Ok(maximum)
-}
-
-async fn publish_runtime_config(
-    path: &camino::Utf8Path,
-    bytes: &[u8],
-) -> Result<(), Error> {
-    if tokio::fs::try_exists(path).await? {
-        return Err(Error::UnsafeRuntimeArtifact(path.to_owned()));
-    }
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let temp = path.with_extension(format!("yaml.tmp-{}-{nonce}", std::process::id()));
-    let result = async {
-        let mut file = tokio::fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&temp)
-            .await?;
-        file.write_all(bytes).await?;
-        file.flush().await?;
-        file.sync_all().await?;
-        drop(file);
-        tokio::fs::hard_link(&temp, path).await.map_err(|error| {
-            if error.kind() == std::io::ErrorKind::AlreadyExists {
-                Error::UnsafeRuntimeArtifact(path.to_owned())
-            } else {
-                Error::Io(error)
-            }
-        })
-    }
-    .await;
-    let _ = tokio::fs::remove_file(&temp).await;
-    result
-}
-
-async fn replace_runtime_config(
-    path: &camino::Utf8Path,
-    bytes: &[u8],
-) -> Result<(), Error> {
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let temp = path.with_extension(format!("yaml.replace-{}-{nonce}", std::process::id()));
-    let mut file = tokio::fs::OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(&temp)
-        .await?;
-    file.write_all(bytes).await?;
-    file.flush().await?;
-    file.sync_all().await?;
-    drop(file);
-
-    let target = path.as_std_path().to_path_buf();
-    let replacement = temp.as_std_path().to_path_buf();
-    let result = tokio::task::spawn_blocking(move || atomic_replace(&target, &replacement))
-        .await
-        .map_err(|error| Error::Io(std::io::Error::other(error.to_string())))?;
-    if result.is_err() {
-        let _ = tokio::fs::remove_file(&temp).await;
-    }
-    result.map_err(Error::Io)
-}
-
-#[cfg(unix)]
-fn atomic_replace(target: &std::path::Path, replacement: &std::path::Path) -> std::io::Result<()> {
-    std::fs::rename(replacement, target)
-}
-
-#[cfg(windows)]
-fn atomic_replace(target: &std::path::Path, replacement: &std::path::Path) -> std::io::Result<()> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows::{
-        Win32::Storage::FileSystem::{REPLACE_FILE_FLAGS, ReplaceFileW},
-        core::PCWSTR,
-    };
-
-    let target: Vec<u16> = target.as_os_str().encode_wide().chain(Some(0)).collect();
-    let replacement: Vec<u16> = replacement
-        .as_os_str()
-        .encode_wide()
-        .chain(Some(0))
-        .collect();
-    unsafe {
-        ReplaceFileW(
-            PCWSTR(target.as_ptr()),
-            PCWSTR(replacement.as_ptr()),
-            PCWSTR::null(),
-            REPLACE_FILE_FLAGS(0),
-            None,
-            None,
-        )
-    }
-    .map_err(std::io::Error::other)
 }
 
 async fn abort_and_await(handle: tokio::task::JoinHandle<()>) {
     handle.abort();
     let _ = handle.await;
-}
-
-async fn cleanup_epoch(revision: &ConfigRevision) {
-    let _ = tokio::fs::remove_file(&revision.runtime_path).await;
-    if let Some(parent) = revision.runtime_path.parent() {
-        let _ = tokio::fs::remove_file(parent.join(format!("core-{}.pid", revision.epoch))).await;
-        #[cfg(not(windows))]
-        let _ = tokio::fs::remove_file(parent.join(format!("core-{}.sock", revision.epoch))).await;
-    }
 }
 
 fn validate_controller_template(template: &str) -> Result<(), Error> {
@@ -803,20 +999,28 @@ mod tests {
     use super::*;
 
     fn options() -> ManagerOptions {
+        static NEXT_RUNTIME: AtomicU64 = AtomicU64::new(0);
+        let runtime = std::env::temp_dir().join(format!(
+            "nyanpasu-core-manager-test-{}-{}",
+            std::process::id(),
+            NEXT_RUNTIME.fetch_add(1, Ordering::Relaxed)
+        ));
         ManagerOptions {
-            runtime_dir: Some("runtime".into()),
+            runtime_dir: Some(camino::Utf8PathBuf::from_path_buf(runtime).unwrap()),
             ..ManagerOptions::default()
         }
     }
 
     #[tokio::test]
     async fn manager_publishes_the_initial_stopped_snapshot() {
-        let manager = CoreManager::new(options()).await.unwrap();
+        let options = options();
+        let expected_runtime = options.runtime_dir.clone();
+        let manager = CoreManager::new(options).await.unwrap();
         assert!(matches!(
             manager.status().state,
             crate::CoreState::Stopped { reason: None }
         ));
-        assert_eq!(manager.options().runtime_dir.as_deref(), Some("runtime".into()));
+        assert_eq!(manager.options().runtime_dir, expected_runtime);
     }
 
     #[tokio::test]
@@ -868,13 +1072,15 @@ mod tests {
     async fn runtime_config_publication_is_create_new_and_atomic() {
         let temp = tempfile::tempdir().unwrap();
         let root = camino::Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
-        let path = root.join("config-4.yaml");
-
-        publish_runtime_config(&path, b"first: true\n").await.unwrap();
-        let error = publish_runtime_config(&path, b"second: true\n")
-            .await
-            .unwrap_err();
-        assert!(matches!(error, Error::UnsafeRuntimeArtifact(_)));
+        let store = RuntimeConfigStore::new(root.clone()).await.unwrap();
+        let first = store.stage(4, b"first: true\n").await.unwrap();
+        let path = store.commit_new(first, 4).await.unwrap();
+        let second = store.stage(4, b"second: true\n").await.unwrap();
+        let error = store.commit_new(second, 4).await.unwrap_err();
+        assert!(matches!(
+            error,
+            Error::Io(error) if error.kind() == std::io::ErrorKind::AlreadyExists
+        ));
         assert_eq!(tokio::fs::read(&path).await.unwrap(), b"first: true\n");
         let mut entries = tokio::fs::read_dir(&root).await.unwrap();
         let mut names = Vec::new();
@@ -888,10 +1094,11 @@ mod tests {
     async fn runtime_config_replacement_is_atomic_and_cleans_staging() {
         let temp = tempfile::tempdir().unwrap();
         let root = camino::Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
-        let path = root.join("config-3.yaml");
-        tokio::fs::write(&path, b"old: true\n").await.unwrap();
+        let store = RuntimeConfigStore::new(root.clone()).await.unwrap();
+        let staged = store.stage(3, b"old: true\n").await.unwrap();
+        let path = store.commit_new(staged, 3).await.unwrap();
 
-        replace_runtime_config(&path, b"new: true\n").await.unwrap();
+        store.replace(3, b"new: true\n").await.unwrap();
         assert_eq!(tokio::fs::read(&path).await.unwrap(), b"new: true\n");
         let mut entries = tokio::fs::read_dir(&root).await.unwrap();
         let mut names = Vec::new();

@@ -1,5 +1,7 @@
 use camino::Utf8PathBuf;
 
+pub use nyanpasu_core_metadata::CoreErrorKind;
+
 use crate::{kind::CoreKind, state::RevisionId};
 
 #[derive(Debug, thiserror::Error)]
@@ -69,4 +71,41 @@ pub enum Error {
     Yaml(#[from] serde_yaml_ng::Error),
     #[error(transparent)]
     Io(#[from] std::io::Error),
+}
+
+impl Error {
+    pub fn kind(&self) -> Option<CoreErrorKind> {
+        match self {
+            Self::AlreadyRunning => Some(CoreErrorKind::AlreadyRunning),
+            Self::NotStarted => Some(CoreErrorKind::NotStarted),
+            Self::ConfigNotFound(_) => Some(CoreErrorKind::ConfigNotFound),
+            Self::BinaryNotFound(_) => Some(CoreErrorKind::BinaryNotFound),
+            Self::ControllerMissing => Some(CoreErrorKind::ControllerMissing),
+            Self::ConfigCheckFailed(_) => Some(CoreErrorKind::ConfigCheckFailed),
+            Self::InvalidConfig(_) | Self::Yaml(_) => Some(CoreErrorKind::InvalidConfig),
+            Self::StopUnconfirmed(_) => Some(CoreErrorKind::StopUnconfirmed),
+            Self::ManagerQuarantined { .. } => Some(CoreErrorKind::Quarantined),
+            Self::RevisionConflict { .. } => Some(CoreErrorKind::RevisionConflict),
+            Self::ApplyFailed(_) => Some(CoreErrorKind::ApplyFailed),
+            Self::ApplyRollbackFailed { .. } => Some(CoreErrorKind::ApplyRollbackFailed),
+            Self::DurabilityUncertain { source, .. } => source.kind(),
+            _ => None,
+        }
+    }
+}
+
+impl From<nyanpasu_utils::io::atomic_fs::AtomicFsError> for Error {
+    fn from(error: nyanpasu_utils::io::atomic_fs::AtomicFsError) -> Self {
+        use nyanpasu_utils::io::atomic_fs::AtomicFsError;
+        match error {
+            AtomicFsError::UnsafePath(path) => Error::UnsafeRuntimeArtifact(utf8_lossy(path)),
+            AtomicFsError::Contended(path) => Error::RuntimeDirectoryOwned(utf8_lossy(path)),
+            AtomicFsError::Io(error) => Error::Io(error),
+        }
+    }
+}
+
+fn utf8_lossy(path: std::path::PathBuf) -> Utf8PathBuf {
+    Utf8PathBuf::from_path_buf(path)
+        .unwrap_or_else(|path| Utf8PathBuf::from(path.to_string_lossy().into_owned()))
 }

@@ -1,6 +1,7 @@
 //! Single-epoch core instance: process supervision and health-probed state.
 
 use std::{
+    collections::VecDeque,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -9,7 +10,8 @@ use std::{
 };
 
 use nyanpasu_utils::process::{
-    Command, EpochPidFile, ProcessEvent, ReadinessProbe, Supervisor, SupervisorEvent,
+    Command, EpochPidFile, OrphanReapOutcome, ProcessError, ProcessEvent, ReadinessProbe,
+    Supervisor, SupervisorEvent, reap_epoch_pid_file,
 };
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio_util::sync::CancellationToken;
@@ -21,7 +23,10 @@ use crate::{
         driver::ProbeDriver,
     },
     kind::{self, CLICOLOR_FORCE_ENV_NAME, MIHOMO_SAFE_PATHS_ENV_NAME},
-    log::{LOG_CHANNEL_CAPACITY, LogFrame},
+    log::{
+        LOG_CHANNEL_CAPACITY, LogFrame, LogParser, LogStream, ParsedFrames, error_summary,
+        format_tail,
+    },
     spec::{InstanceSpec, ResolvedController},
     state::{HealthState, HealthStatus, InstanceState, InstanceStatus, StopReason},
 };
@@ -34,9 +39,14 @@ pub struct Instance {
     shared: Arc<Shared>,
 }
 
+const LOG_TAIL_FRAMES: usize = 32;
+
 struct Shared {
     state_tx: watch::Sender<InstanceStatus>,
     user_stop: AtomicBool,
+    parser: std::sync::Mutex<LogParser>,
+    log_tail: std::sync::Mutex<VecDeque<Arc<LogFrame>>>,
+    log_tx: broadcast::Sender<Arc<LogFrame>>,
     cancel: CancellationToken,
     supervisor: tokio::sync::Mutex<Option<Supervisor>>,
     monitor: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
@@ -55,7 +65,7 @@ pub struct InstanceBuilder {
     readiness_probe: Option<ProbeHandle>,
     liveness_probe: Option<ProbeHandle>,
     liveness_with_readiness: bool,
-    log_tx: Option<broadcast::Sender<LogFrame>>,
+    log_tx: Option<broadcast::Sender<Arc<LogFrame>>>,
 }
 
 impl Instance {
@@ -118,7 +128,6 @@ impl Instance {
         } else {
             liveness_probe
         };
-        let startup_timeout = spec.options.startup_timeout;
         let spec = Arc::new(spec);
         let controller = Arc::new(controller);
         let cancel = parent.child_token();
@@ -127,13 +136,15 @@ impl Instance {
         let shared = Arc::new(Shared {
             state_tx,
             user_stop: AtomicBool::new(false),
+            parser: std::sync::Mutex::new(LogParser::new(spec.core.kind, epoch)),
+            log_tail: std::sync::Mutex::new(VecDeque::with_capacity(LOG_TAIL_FRAMES)),
+            log_tx: log_tx.unwrap_or_else(|| broadcast::channel(LOG_CHANNEL_CAPACITY).0),
             cancel: cancel.clone(),
             supervisor: tokio::sync::Mutex::new(None),
             monitor: tokio::sync::Mutex::new(None),
             probe_request_tx,
         });
         let (event_tx, event_rx) = mpsc::unbounded_channel();
-        let log_tx = log_tx.unwrap_or_else(|| broadcast::channel(LOG_CHANNEL_CAPACITY).0);
         let supervisor = Supervisor::builder({
             let spec = spec.clone();
             let controller = controller.clone();
@@ -148,18 +159,21 @@ impl Instance {
         })
         .on_process_event({
             let kind = spec.core.kind;
-            move |event| match event {
-                ProcessEvent::Stdout(line) => {
-                    let _ = log_tx.send(LogFrame::stdout(kind, epoch, line));
+            let shared = shared.clone();
+            move |event| {
+                let frames = match event {
+                    ProcessEvent::Stdout(line) => shared.parse(LogStream::Stdout, line),
+                    ProcessEvent::Stderr(line) => shared.parse(LogStream::Stderr, line),
+                    ProcessEvent::Terminated(_) => shared.finish_log_record(),
+                    ProcessEvent::Error(error) => {
+                        tracing::warn!(target: "core", epoch, %kind, "output pump: {error}");
+                        [None, None]
+                    }
+                    _ => [None, None],
+                };
+                for frame in frames.into_iter().flatten() {
+                    shared.publish_log_frame(frame);
                 }
-                ProcessEvent::Stderr(line) => {
-                    let _ = log_tx.send(LogFrame::stderr(kind, epoch, line));
-                }
-                ProcessEvent::Error(error) => {
-                    tracing::warn!(target: "core", epoch, %kind, "output pump: {error}");
-                }
-                ProcessEvent::Terminated(_) => {}
-                _ => {}
             }
         })
         .spawn()
@@ -185,10 +199,6 @@ impl Instance {
         ));
         *shared.monitor.lock().await = Some(monitor);
 
-        if let Err(error) = instance.wait_until_ready(startup_timeout).await {
-            let _ = instance.stop().await;
-            return Err(error);
-        }
         Ok(instance)
     }
 
@@ -200,13 +210,13 @@ impl Instance {
                     InstanceState::Running { .. } => return Ok(()),
                     InstanceState::Stopped(reason) => {
                         return Err(Error::StartupFailed {
-                            stderr_tail: reason.to_string(),
+                            stderr_tail: self.shared.failure_summary(&reason.to_string()),
                         });
                     }
                     _ => {}
                 }
                 states.changed().await.map_err(|_| Error::StartupFailed {
-                    stderr_tail: "instance state channel closed".into(),
+                    stderr_tail: self.shared.failure_summary("instance state channel closed"),
                 })?;
             }
         })
@@ -214,7 +224,9 @@ impl Instance {
         match result {
             Ok(result) => result,
             Err(_) => Err(Error::StartupTimeout {
-                stderr_tail: "controller readiness probe did not become healthy".into(),
+                stderr_tail: self
+                    .shared
+                    .failure_summary("controller readiness probe did not become healthy"),
             }),
         }
     }
@@ -229,6 +241,18 @@ impl Instance {
 
     pub fn controller(&self) -> &ResolvedController {
         &self.controller
+    }
+
+    pub fn pid(&self) -> Option<u32> {
+        match self.state_rx.borrow().state {
+            InstanceState::Running { pid } => Some(pid),
+            _ => None,
+        }
+    }
+
+    /// Wait until the initial readiness probe has confirmed this epoch.
+    pub async fn wait_ready(&self) -> Result<(), Error> {
+        self.wait_until_ready(self.spec.options.startup_timeout).await
     }
 
     pub fn subscribe(&self) -> watch::Receiver<InstanceStatus> {
@@ -263,16 +287,78 @@ impl Instance {
     }
 
     pub async fn stop(&self) -> Result<(), Error> {
-        self.shared.user_stop.store(true, Ordering::SeqCst);
-        self.shared.cancel.cancel();
-        if let Some(supervisor) = self.shared.supervisor.lock().await.take() {
-            supervisor.stop().await?;
-        }
-        if let Some(monitor) = self.shared.monitor.lock().await.take() {
-            let _ = monitor.await;
-        }
-        Ok(())
+        self.stop_and_confirm_dead(Duration::from_secs(10)).await
     }
+
+    /// Stop supervision and prove the epoch process is dead before returning.
+    pub async fn stop_and_confirm_dead(&self, timeout: Duration) -> Result<(), Error> {
+        // A terminal state is published only after the supervisor has observed
+        // the child exit. That is stronger evidence than reopening the pid file
+        // afterwards, which races process-handle teardown on Windows.
+        if self.state_rx.borrow().state.is_terminal() {
+            return Ok(());
+        }
+
+        self.shared.user_stop.store(true, Ordering::SeqCst);
+        self.shared.publish_state(InstanceState::Stopping);
+        self.shared.cancel.cancel();
+        let supervisor = self.shared.supervisor.lock().await.take();
+        let stop_result = match supervisor {
+            Some(supervisor) => match tokio::time::timeout(timeout, supervisor.stop()).await {
+                Ok(Ok(())) | Ok(Err(ProcessError::AlreadyExited)) => Ok(()),
+                Ok(Err(error)) => Err(format!("supervisor stop failed: {error}")),
+                Err(_) => Err(format!("supervisor stop exceeded {timeout:?}")),
+            },
+            None => Ok(()),
+        };
+
+        let mut monitor_confirmed = false;
+        if let Some(mut monitor) = self.shared.monitor.lock().await.take() {
+            match tokio::time::timeout(timeout, &mut monitor).await {
+                Ok(_) => monitor_confirmed = true,
+                Err(_) => {
+                    monitor.abort();
+                    let _ = monitor.await;
+                }
+            }
+        }
+        let terminal = self.state_rx.borrow().state.is_terminal();
+        if stop_result.is_ok() && (monitor_confirmed || terminal) {
+            if !terminal {
+                self.shared
+                    .publish_state(InstanceState::Stopped(StopReason::User));
+            }
+            return Ok(());
+        }
+
+        let stop_error = stop_result
+            .err()
+            .unwrap_or_else(|| "instance monitor did not confirm termination".to_owned());
+        let Some(pid_file) = self.spec.pid_file.as_ref() else {
+            return Err(Error::StopUnconfirmed(stop_error));
+        };
+        let runtime_dir = self.spec.config_path.parent().ok_or_else(|| {
+            Error::StopUnconfirmed("runtime config has no parent directory".into())
+        })?;
+        let reaped = reap_epoch_pid_file(pid_file.as_std_path(), runtime_dir.as_std_path())
+            .await
+            .map_err(|error| {
+                Error::StopUnconfirmed(format!(
+                    "{stop_error}; epoch identity reaper failed: {error}"
+                ))
+            })?;
+        if matches!(reaped, OrphanReapOutcome::AlreadyExited | OrphanReapOutcome::Killed)
+            || (matches!(reaped, OrphanReapOutcome::NotFound) && terminal)
+        {
+            if !terminal {
+                self.shared
+                    .publish_state(InstanceState::Stopped(StopReason::User));
+            }
+            return Ok(());
+        }
+        Err(Error::StopUnconfirmed(stop_error))
+    }
+
 }
 
 impl Drop for Instance {
@@ -299,7 +385,7 @@ impl InstanceBuilder {
         self
     }
 
-    pub(crate) fn log_sender(mut self, sender: broadcast::Sender<LogFrame>) -> Self {
+    pub(crate) fn log_sender(mut self, sender: broadcast::Sender<Arc<LogFrame>>) -> Self {
         self.log_tx = Some(sender);
         self
     }
@@ -431,12 +517,69 @@ async fn monitor_loop(
             }
         }
     }
+    shared.flush_log_record();
     if let Some(driver) = driver {
         driver.stop().await;
     }
 }
 
 impl Shared {
+    fn parse(&self, stream: LogStream, line: String) -> ParsedFrames {
+        self.parser
+            .lock()
+            .expect("core log parser poisoned")
+            .push(stream, line)
+    }
+
+    fn finish_log_record(&self) -> ParsedFrames {
+        self.parser
+            .lock()
+            .expect("core log parser poisoned")
+            .finish()
+    }
+
+    fn publish_log_frame(&self, frame: LogFrame) {
+        let frame = Arc::new(frame);
+        let mut tail = self.log_tail.lock().expect("core log tail poisoned");
+        if tail.len() == LOG_TAIL_FRAMES {
+            tail.pop_front();
+        }
+        tail.push_back(Arc::clone(&frame));
+        drop(tail);
+        let _ = self.log_tx.send(frame);
+    }
+
+    fn flush_log_record(&self) {
+        for frame in self.finish_log_record().into_iter().flatten() {
+            self.publish_log_frame(frame);
+        }
+    }
+
+    fn diagnostic_frames(&self) -> Vec<Arc<LogFrame>> {
+        self.flush_log_record();
+        self.log_tail
+            .lock()
+            .expect("core log tail poisoned")
+            .iter()
+            .cloned()
+            .collect()
+    }
+
+    fn diagnostics(&self) -> String {
+        format_tail(&self.diagnostic_frames())
+    }
+
+    fn failure_summary(&self, fallback: &str) -> String {
+        error_summary(&self.diagnostic_frames()).unwrap_or_else(|| {
+            let tail = self.diagnostics();
+            if tail.is_empty() {
+                fallback.to_owned()
+            } else {
+                tail
+            }
+        })
+    }
+
     fn publish_state(&self, state: InstanceState) {
         self.state_tx.send_modify(|status| status.state = state.clone());
     }

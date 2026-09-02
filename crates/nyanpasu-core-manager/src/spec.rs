@@ -78,6 +78,12 @@ pub struct ManagerOptions {
     pub reconcile_timeout: Duration,
     pub stop_timeout: Duration,
     pub cancel_token: CancellationToken,
+    /// Write structured core logs under `{runtime_dir}/logs/`.
+    pub log_sink_enabled: bool,
+    /// Soft rotation threshold for one JSONL file.
+    pub log_max_bytes: u64,
+    /// Number of JSONL files retained, including the active file.
+    pub log_max_files: usize,
 }
 
 impl Default for ManagerOptions {
@@ -90,6 +96,9 @@ impl Default for ManagerOptions {
             reconcile_timeout: Duration::from_secs(30),
             stop_timeout: Duration::from_secs(10),
             cancel_token: CancellationToken::new(),
+            log_sink_enabled: true,
+            log_max_bytes: 4 * 1024 * 1024,
+            log_max_files: 5,
         }
     }
 }
@@ -122,5 +131,8 @@ mod tests {
         assert_eq!(options.control_timeout, Duration::from_secs(10));
         assert_eq!(options.reconcile_timeout, Duration::from_secs(30));
         assert_eq!(options.stop_timeout, Duration::from_secs(10));
+        assert!(options.log_sink_enabled);
+        assert_eq!(options.log_max_bytes, 4 * 1024 * 1024);
+        assert_eq!(options.log_max_files, 5);
     }
 }
