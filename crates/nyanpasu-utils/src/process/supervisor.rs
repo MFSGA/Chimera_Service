@@ -453,3 +453,152 @@ async fn sleep_until(deadline: Option<tokio::time::Instant>) {
         None => std::future::pending().await,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exponential_backoff_doubles_and_caps() {
+        let backoff = Backoff::exponential(Duration::from_secs(1), Duration::from_secs(5));
+        assert_eq!(backoff.delay_for(0), Duration::from_secs(1));
+        assert_eq!(backoff.delay_for(1), Duration::from_secs(2));
+        assert_eq!(backoff.delay_for(2), Duration::from_secs(4));
+        assert_eq!(backoff.delay_for(3), Duration::from_secs(5));
+        assert_eq!(backoff.delay_for(30), Duration::from_secs(5));
+    }
+
+    #[test]
+    fn jitter_stays_within_twenty_five_percent() {
+        let base = Duration::from_secs(4);
+        let backoff = Backoff::exponential(base, base).with_jitter();
+        for _ in 0..32 {
+            let delay = backoff.delay_for(0);
+            assert!(delay >= Duration::from_secs(3));
+            assert!(delay < Duration::from_secs(5));
+        }
+    }
+
+    #[test]
+    fn storm_policy_sanitizes_zero_values() {
+        let policy = RestartStormPolicy::new(0, Duration::ZERO);
+        assert_eq!(policy.max_failures(), 1);
+        assert_eq!(policy.window(), Duration::from_millis(1));
+    }
+
+    #[cfg(windows)]
+    fn exit_command(code: i32) -> Command {
+        Command::new("cmd").args(["/C", &format!("exit {code}")])
+    }
+
+    #[cfg(unix)]
+    fn exit_command(code: i32) -> Command {
+        Command::new("sh").args(["-c", &format!("exit {code}")])
+    }
+
+    #[cfg(windows)]
+    fn long_running_command() -> Command {
+        Command::new("powershell.exe").args([
+            "-NoProfile",
+            "-Command",
+            "Start-Sleep -Seconds 30",
+        ])
+    }
+
+    #[cfg(unix)]
+    fn long_running_command() -> Command {
+        Command::new("sh").args(["-c", "sleep 30"])
+    }
+
+    #[tokio::test]
+    async fn clean_exit_emits_the_full_lifecycle() {
+        let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+        let supervisor = Supervisor::builder(|| Command::new("rustc").arg("--version"))
+            .readiness(ReadinessProbe::AliveAfter(Duration::ZERO))
+            .on_event(move |event| {
+                let _ = event_tx.send(event);
+            })
+            .spawn()
+            .await
+            .unwrap();
+
+        let mut started = false;
+        let mut ready = false;
+        let mut exited = false;
+        let mut stopped = false;
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while let Some(event) = event_rx.recv().await {
+                match event {
+                    SupervisorEvent::Started { .. } => started = true,
+                    SupervisorEvent::Ready => ready = true,
+                    SupervisorEvent::Exited(payload) => exited = payload.code == Some(0),
+                    SupervisorEvent::Stopped => {
+                        stopped = true;
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        })
+        .await
+        .unwrap();
+        supervisor.stop().await.unwrap();
+        assert!(started && ready && exited && stopped);
+    }
+
+    #[tokio::test]
+    async fn failed_process_restarts_until_the_budget_is_exhausted() {
+        let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+        let supervisor = Supervisor::builder(|| exit_command(7))
+            .restart_policy(RestartPolicy::OnFailure { max_restarts: 2 })
+            .restart_storm_policy(RestartStormPolicy::new(10, Duration::from_secs(30)))
+            .backoff(Backoff::exponential(Duration::ZERO, Duration::ZERO))
+            .on_event(move |event| {
+                let _ = event_tx.send(event);
+            })
+            .spawn()
+            .await
+            .unwrap();
+
+        let mut starts = 0;
+        let mut restarts = 0;
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while let Some(event) = event_rx.recv().await {
+                match event {
+                    SupervisorEvent::Started { .. } => starts += 1,
+                    SupervisorEvent::Restarting { .. } => restarts += 1,
+                    SupervisorEvent::GaveUp => break,
+                    _ => {}
+                }
+            }
+        })
+        .await
+        .unwrap();
+        supervisor.stop().await.unwrap();
+        assert_eq!(starts, 3);
+        assert_eq!(restarts, 2);
+    }
+
+    #[tokio::test]
+    async fn acknowledged_readiness_rejects_stale_pids() {
+        let (pid_tx, mut pid_rx) = tokio::sync::mpsc::unbounded_channel();
+        let supervisor = Supervisor::builder(long_running_command)
+            .readiness(ReadinessProbe::Acknowledged)
+            .on_event(move |event| {
+                if let SupervisorEvent::Started { pid } = event {
+                    let _ = pid_tx.send(pid);
+                }
+            })
+            .spawn()
+            .await
+            .unwrap();
+        let pid = tokio::time::timeout(Duration::from_secs(5), pid_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!supervisor.acknowledge_ready(pid + 1).await);
+        assert!(supervisor.acknowledge_ready(pid).await);
+        assert!(!supervisor.acknowledge_ready(pid).await);
+        supervisor.stop().await.unwrap();
+    }
+}
