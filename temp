@@ -1,16 +1,25 @@
 
-## [1.8.1] - 2026-07-31 10:47:26
+## [1.9.0] - 2026-09-02 11:25:34
 
 
 ### ✨ Features
 
-- Support renovate by @MFSGA 
+- **clash-api:** Add controller endpoint primitives by @MFSGA 
+
+- **cli:** Backport service maintenance commands by @MFSGA 
+
+
+### 🐛 Bug Fixes
+
+- **deps:** Update rust crate tower-http to 0.7 (#25) by @MFSGA  in [#25](https://github.com/MFSGA/Chimera_Service/pull/25)
+
+- **deps:** Update rust crate sysinfo to 0.39.0 (#24) by @MFSGA  in [#24](https://github.com/MFSGA/Chimera_Service/pull/24)
 
 -----------------
 
 
 
-**Full Changelog**: https://github.com/MFSGA/Chimera_Service/compare/v1.8.0...v1.8.1
+**Full Changelog**: https://github.com/MFSGA/Chimera_Service/compare/v1.8.1...v1.9.0
 
 
 
