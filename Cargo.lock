@@ -1773,6 +1773,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "nyanpasu-core-manager"
+version = "0.1.1"
+dependencies = [
+ "camino",
+ "clash-api",
+ "enumset",
+ "nyanpasu-core-metadata",
+ "nyanpasu-utils",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
 name = "nyanpasu-core-metadata"
 version = "0.1.0"
 dependencies = [
