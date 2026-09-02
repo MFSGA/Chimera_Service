@@ -14,17 +14,15 @@ fn core_type_parser(value: &str) -> Result<CoreType, String> {
         "clash-rs" => Some(CoreType::Clash(ClashCoreType::ClashRust)),
         "clash-rs-alpha" => Some(CoreType::Clash(ClashCoreType::ClashRustAlpha)),
         "clash" => Some(CoreType::Clash(ClashCoreType::ClashPremium)),
-        "chimera-client" | "chimera_client" => {
-            Some(CoreType::Clash(ClashCoreType::ChimeraClient))
-        }
+        "chimera-client" | "chimera_client" => Some(CoreType::Clash(ClashCoreType::ChimeraClient)),
         "singbox" => Some(CoreType::SingBox),
         _ => None,
     };
-    friendly.or_else(|| serde_json::from_str(value).ok()).ok_or_else(|| {
-        format!(
-            "Failed to parse core type `{value}`; use a core name or the legacy JSON form"
-        )
-    })
+    friendly
+        .or_else(|| serde_json::from_str(value).ok())
+        .ok_or_else(|| {
+            format!("Failed to parse core type `{value}`; use a core name or the legacy JSON form")
+        })
 }
 
 fn parse_revision_id(value: &str) -> Result<RevisionIdInfo, String> {

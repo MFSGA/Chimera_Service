@@ -240,10 +240,7 @@ impl SupervisorBuilder {
         self
     }
 
-    pub fn on_process_event(
-        mut self,
-        hook: impl Fn(ProcessEvent) + Send + Sync + 'static,
-    ) -> Self {
+    pub fn on_process_event(mut self, hook: impl Fn(ProcessEvent) + Send + Sync + 'static) -> Self {
         self.on_process_event = Some(Arc::new(hook));
         self
     }
@@ -302,9 +299,7 @@ impl SupervisorBuilder {
             loop {
                 let (pid, mut events) = next_process.take().expect("active process events");
                 let ready_at = match readiness {
-                    ReadinessProbe::AliveAfter(delay) => {
-                        Some(tokio::time::Instant::now() + delay)
-                    }
+                    ReadinessProbe::AliveAfter(delay) => Some(tokio::time::Instant::now() + delay),
                     ReadinessProbe::Acknowledged => None,
                 };
                 let mut readiness_pending = true;
@@ -498,11 +493,7 @@ mod tests {
 
     #[cfg(windows)]
     fn long_running_command() -> Command {
-        Command::new("powershell.exe").args([
-            "-NoProfile",
-            "-Command",
-            "Start-Sleep -Seconds 30",
-        ])
+        Command::new("powershell.exe").args(["-NoProfile", "-Command", "Start-Sleep -Seconds 30"])
     }
 
     #[cfg(unix)]

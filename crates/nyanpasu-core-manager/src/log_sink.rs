@@ -13,11 +13,7 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
-use crate::{
-    Error,
-    config::runtime_store::validate_directory_metadata,
-    log::LogFrame,
-};
+use crate::{Error, config::runtime_store::validate_directory_metadata, log::LogFrame};
 
 const LOG_DIR_NAME: &str = "logs";
 const FILE_PREFIX: &str = "core-";
@@ -364,7 +360,10 @@ mod tests {
         .await
         .unwrap();
         for epoch in 1..=10 {
-            writer.write(&[Entry::Log(frame(epoch, "a moderately long record"))]).await.unwrap();
+            writer
+                .write(&[Entry::Log(frame(epoch, "a moderately long record"))])
+                .await
+                .unwrap();
         }
         assert!(archive_files(&dir).await.unwrap().len() <= 2);
     }

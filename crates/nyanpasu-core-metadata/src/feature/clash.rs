@@ -105,8 +105,14 @@ mod tests {
             (&CLASH_RS_UNIX, "0.9.0", "0.9.1"),
             (&CLASH_RS_PIPE, "0.9.6", "0.9.7"),
         ] {
-            assert!(matches!(since(floor, version(last_without).as_ref()), Support::No));
-            assert!(matches!(since(floor, version(first_with).as_ref()), Support::Yes));
+            assert!(matches!(
+                since(floor, version(last_without).as_ref()),
+                Support::No
+            ));
+            assert!(matches!(
+                since(floor, version(first_with).as_ref()),
+                Support::Yes
+            ));
         }
     }
 

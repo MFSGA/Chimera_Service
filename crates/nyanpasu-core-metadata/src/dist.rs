@@ -114,16 +114,15 @@ mod tests {
     #[test]
     fn distribution_omits_unknown_provenance_and_queries_open_groups() {
         let plain = CoreDistribution::new(ClashCoreKind::Mihomo);
-        assert_eq!(serde_json::to_string(&plain).unwrap(), r#"{"kind":"mihomo"}"#);
+        assert_eq!(
+            serde_json::to_string(&plain).unwrap(),
+            r#"{"kind":"mihomo"}"#
+        );
 
         let distribution = CoreDistribution {
             kind: ClashCoreKind::Mihomo,
             variant: Some("alpha-goamd64-v3".into()),
-            tags: BTreeSet::from([
-                tag("channel:alpha"),
-                tag("goamd64:v3"),
-                tag("portable"),
-            ]),
+            tags: BTreeSet::from([tag("channel:alpha"), tag("goamd64:v3"), tag("portable")]),
         };
         assert_eq!(distribution.channel(), Some("alpha"));
         assert_eq!(distribution.tag_value("goamd64"), Some("v3"));

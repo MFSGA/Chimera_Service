@@ -18,10 +18,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     ControllerVersionProbe, Error, ProbeHandle, ProbePhase, ProbeResult,
-    health::{
-        HealthTracker, TrackerState,
-        driver::ProbeDriver,
-    },
+    health::{HealthTracker, TrackerState, driver::ProbeDriver},
     kind::{self, CLICOLOR_FORCE_ENV_NAME, MIHOMO_SAFE_PATHS_ENV_NAME},
     log::{
         LOG_CHANNEL_CAPACITY, LogFrame, LogParser, LogStream, ParsedFrames, error_summary,
@@ -93,9 +90,7 @@ impl Instance {
         controller: ResolvedController,
         parent: CancellationToken,
     ) -> Result<Self, Error> {
-        Self::builder(spec, epoch, controller, parent)
-            .spawn()
-            .await
+        Self::builder(spec, epoch, controller, parent).spawn().await
     }
 
     async fn spawn_configured(builder: InstanceBuilder) -> Result<Self, Error> {
@@ -252,7 +247,8 @@ impl Instance {
 
     /// Wait until the initial readiness probe has confirmed this epoch.
     pub async fn wait_ready(&self) -> Result<(), Error> {
-        self.wait_until_ready(self.spec.options.startup_timeout).await
+        self.wait_until_ready(self.spec.options.startup_timeout)
+            .await
     }
 
     pub fn subscribe(&self) -> watch::Receiver<InstanceStatus> {
@@ -347,8 +343,10 @@ impl Instance {
                     "{stop_error}; epoch identity reaper failed: {error}"
                 ))
             })?;
-        if matches!(reaped, OrphanReapOutcome::AlreadyExited | OrphanReapOutcome::Killed)
-            || (matches!(reaped, OrphanReapOutcome::NotFound) && terminal)
+        if matches!(
+            reaped,
+            OrphanReapOutcome::AlreadyExited | OrphanReapOutcome::Killed
+        ) || (matches!(reaped, OrphanReapOutcome::NotFound) && terminal)
         {
             if !terminal {
                 self.shared
@@ -358,7 +356,6 @@ impl Instance {
         }
         Err(Error::StopUnconfirmed(stop_error))
     }
-
 }
 
 impl Drop for Instance {
@@ -581,7 +578,8 @@ impl Shared {
     }
 
     fn publish_state(&self, state: InstanceState) {
-        self.state_tx.send_modify(|status| status.state = state.clone());
+        self.state_tx
+            .send_modify(|status| status.state = state.clone());
     }
 
     fn publish(&self, state: InstanceState, health: Option<HealthStatus>) {

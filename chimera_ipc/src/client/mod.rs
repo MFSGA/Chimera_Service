@@ -106,10 +106,8 @@ where
 pub(crate) async fn open_websocket<'a>(
     placeholder: &'a str,
     request: Request<axum::body::Body>,
-) -> Result<
-    tokio_tungstenite::WebSocketStream<TokioIo<hyper::upgrade::Upgraded>>,
-    ClientError<'a>,
-> {
+) -> Result<tokio_tungstenite::WebSocketStream<TokioIo<hyper::upgrade::Upgraded>>, ClientError<'a>>
+{
     let mut response = send_request(placeholder, request).await?.response;
     if response.status() != hyper::StatusCode::SWITCHING_PROTOCOLS {
         return Err(ClientError::Other(anyhow::anyhow!(

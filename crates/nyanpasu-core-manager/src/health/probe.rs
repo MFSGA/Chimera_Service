@@ -104,8 +104,8 @@ pub struct ControllerVersionProbe {
 
 impl ControllerVersionProbe {
     pub fn new(controller: &ResolvedController) -> Result<Self, Error> {
-        let mut builder = clash_api::Client::builder(controller.host.clone())
-            .timeout(Duration::from_secs(1));
+        let mut builder =
+            clash_api::Client::builder(controller.host.clone()).timeout(Duration::from_secs(1));
         if let Some(secret) = &controller.secret {
             builder = builder.secret(secret.as_str());
         }

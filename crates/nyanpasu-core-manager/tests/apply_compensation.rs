@@ -10,8 +10,7 @@ use camino::Utf8PathBuf;
 use nyanpasu_core_manager::{
     ApplyOutcome, CoreKind, CoreManager, CoreSpec, CoreState, Error, InstanceOptions, InstanceSpec,
     InstanceState, InstanceStatus, ManagerOptions, ProbePhase, ProbeResult, ResolvedController,
-    RuntimeBackend, RuntimeInstance, RuntimeLaunchRequest,
-    runtime::BoxFuture,
+    RuntimeBackend, RuntimeInstance, RuntimeLaunchRequest, runtime::BoxFuture,
 };
 use tokio::sync::watch;
 
@@ -24,12 +23,7 @@ struct FakeInstance {
 }
 
 impl FakeInstance {
-    fn new(
-        spec: InstanceSpec,
-        epoch: u64,
-        controller: ResolvedController,
-        pid: u32,
-    ) -> Self {
+    fn new(spec: InstanceSpec, epoch: u64, controller: ResolvedController, pid: u32) -> Self {
         let (state_tx, _) = watch::channel(InstanceStatus {
             state: InstanceState::Running { pid },
             health: None,
@@ -176,10 +170,7 @@ async fn failed_same_epoch_replacement_rolls_back_the_original_revision() {
     let before_revision = before.revision.unwrap();
     assert!(matches!(
         before.state,
-        CoreState::Running {
-            epoch: 1,
-            pid: 100
-        }
+        CoreState::Running { epoch: 1, pid: 100 }
     ));
 
     let outcome = manager
@@ -200,10 +191,7 @@ async fn failed_same_epoch_replacement_rolls_back_the_original_revision() {
     assert_eq!(after.revision, Some(before_revision.clone()));
     assert!(matches!(
         after.state,
-        CoreState::Running {
-            epoch: 1,
-            pid: 200
-        }
+        CoreState::Running { epoch: 1, pid: 200 }
     ));
     assert_eq!(backend.launches.load(Ordering::SeqCst), 3);
 

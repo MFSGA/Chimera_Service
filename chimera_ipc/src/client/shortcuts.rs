@@ -9,9 +9,7 @@ use axum::body::Body;
 use futures_util::{Stream, StreamExt};
 use hyper::{
     Method, Request,
-    header::{
-        CONNECTION, CONTENT_TYPE, SEC_WEBSOCKET_KEY, SEC_WEBSOCKET_VERSION, UPGRADE,
-    },
+    header::{CONNECTION, CONTENT_TYPE, SEC_WEBSOCKET_KEY, SEC_WEBSOCKET_VERSION, UPGRADE},
 };
 use tokio_tungstenite::tungstenite::{Message, handshake::client::generate_key};
 
@@ -198,9 +196,7 @@ impl<'a> Client<'a> {
                     return Some(Err(ClientError::Other(anyhow::Error::new(source))));
                 }
             };
-            Some(
-                simd_json::serde::from_slice(&mut bytes).map_err(ClientError::ParseFailed),
-            )
+            Some(simd_json::serde::from_slice(&mut bytes).map_err(ClientError::ParseFailed))
         });
         Ok(EventStream {
             inner: Box::pin(stream),

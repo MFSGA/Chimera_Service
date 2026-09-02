@@ -210,8 +210,17 @@ mod tests {
         );
         assert_eq!(frame.level, LogLevel::Warning);
         assert_eq!(frame.message, r#"say "hello""#);
-        assert_eq!(frame.timestamp.as_ref().unwrap().raw, "2026-07-29T00:16:22+08:00");
-        assert_eq!(frame.fields, [LogField { key: "request".into(), value: "7".into() }]);
+        assert_eq!(
+            frame.timestamp.as_ref().unwrap().raw,
+            "2026-07-29T00:16:22+08:00"
+        );
+        assert_eq!(
+            frame.fields,
+            [LogField {
+                key: "request".into(),
+                value: "7".into()
+            }]
+        );
     }
 
     #[test]
@@ -260,7 +269,11 @@ mod tests {
         let frame = parser.finish().into_iter().flatten().next().unwrap();
         assert_eq!(frame.level, LogLevel::Fatal);
         assert_eq!(frame.target.as_deref(), Some("Config"));
-        assert!(frame.message.contains("goroutine 1 [running]:\nmain.main()"));
+        assert!(
+            frame
+                .message
+                .contains("goroutine 1 [running]:\nmain.main()")
+        );
     }
 
     #[test]

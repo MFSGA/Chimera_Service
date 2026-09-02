@@ -1,7 +1,10 @@
 use chrono::{DateTime, Duration, FixedOffset, NaiveDate, NaiveTime};
 use nyanpasu_core_metadata::LogTimestamp;
 
-use super::{ParsedLine, common::{local_unix_ms, parse_level, parse_rfc3339_ms, take_token}};
+use super::{
+    ParsedLine,
+    common::{local_unix_ms, parse_level, parse_rfc3339_ms, take_token},
+};
 
 pub(super) fn parse_meow(line: &str) -> Option<ParsedLine> {
     let (raw_time, rest) = take_token(line)?;
@@ -24,10 +27,7 @@ pub(super) fn parse_meow(line: &str) -> Option<ParsedLine> {
     })
 }
 
-pub(super) fn parse_clash_rs(
-    line: &str,
-    observed_at: DateTime<FixedOffset>,
-) -> Option<ParsedLine> {
+pub(super) fn parse_clash_rs(line: &str, observed_at: DateTime<FixedOffset>) -> Option<ParsedLine> {
     let timestamp_end = clash_rs_timestamp_end(line)?;
     let raw_time = line.get(..timestamp_end)?;
     let (level, rest) = take_token(line.get(timestamp_end..)?)?;
@@ -79,7 +79,8 @@ fn clash_rs_unix_ms(raw: &str, offset: &FixedOffset) -> Option<i64> {
     let subsecond = raw.get(18..)?;
     let nanos = subsecond.parse::<u32>().ok()? * 10_u32.pow(9 - subsecond.len() as u32);
     let date = NaiveDate::from_ymd_opt(2000 + number(0..2)? as i32, number(3..5)?, number(6..8)?)?;
-    let time = NaiveTime::from_hms_nano_opt(number(9..11)?, number(12..14)?, number(15..17)?, nanos)?;
+    let time =
+        NaiveTime::from_hms_nano_opt(number(9..11)?, number(12..14)?, number(15..17)?, nanos)?;
     local_unix_ms(date, time, offset)
 }
 

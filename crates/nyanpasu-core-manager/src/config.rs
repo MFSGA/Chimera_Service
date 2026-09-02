@@ -11,10 +11,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use enumset::EnumSet;
 use serde_yaml_ng::{Mapping, Value};
 
-use crate::{
-    Error, RuntimeFeature,
-    spec::ResolvedController,
-};
+use crate::{Error, RuntimeFeature, spec::ResolvedController};
 
 #[derive(Debug, Clone)]
 pub(crate) struct ConfigSnapshot {
@@ -332,9 +329,15 @@ mod tests {
         assert!(text.contains("managed-7.sock"));
         assert_eq!(prepared.controller.secret.as_deref(), Some("token"));
         #[cfg(windows)]
-        assert!(matches!(prepared.controller.host, clash_api::Host::NamedPipe(_)));
+        assert!(matches!(
+            prepared.controller.host,
+            clash_api::Host::NamedPipe(_)
+        ));
         #[cfg(not(windows))]
-        assert!(matches!(prepared.controller.host, clash_api::Host::UnixSocket(_)));
+        assert!(matches!(
+            prepared.controller.host,
+            clash_api::Host::UnixSocket(_)
+        ));
     }
 
     #[test]

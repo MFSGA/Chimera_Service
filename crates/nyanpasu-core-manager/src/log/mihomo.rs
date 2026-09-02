@@ -1,6 +1,9 @@
 use nyanpasu_core_metadata::{LogField, LogTimestamp};
 
-use super::{ParsedLine, common::{parse_level, parse_rfc3339_ms}};
+use super::{
+    ParsedLine,
+    common::{parse_level, parse_rfc3339_ms},
+};
 
 pub(super) fn parse(line: &str) -> Option<ParsedLine> {
     let mut raw_time = None;

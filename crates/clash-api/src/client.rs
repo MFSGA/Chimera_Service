@@ -192,7 +192,11 @@ impl Client {
         }
     }
 
-    pub(crate) async fn send<F>(&self, metadata: RequestMetadata, make_request: F) -> Result<Response>
+    pub(crate) async fn send<F>(
+        &self,
+        metadata: RequestMetadata,
+        make_request: F,
+    ) -> Result<Response>
     where
         F: Fn() -> Result<RequestBuilder>,
     {
@@ -506,7 +510,13 @@ mod tests {
         let client = Client::new_http("127.0.0.1:9090/api").unwrap();
         assert_eq!(client.base_url().as_str(), "http://127.0.0.1:9090/api/");
         assert_eq!(
-            client.get("/version").unwrap().build().unwrap().url().as_str(),
+            client
+                .get("/version")
+                .unwrap()
+                .build()
+                .unwrap()
+                .url()
+                .as_str(),
             "http://127.0.0.1:9090/api/version"
         );
     }

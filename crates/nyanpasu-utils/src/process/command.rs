@@ -54,10 +54,8 @@ impl Command {
     }
 
     pub fn env(mut self, key: impl AsRef<OsStr>, value: impl AsRef<OsStr>) -> Self {
-        self.envs.push((
-            key.as_ref().to_os_string(),
-            value.as_ref().to_os_string(),
-        ));
+        self.envs
+            .push((key.as_ref().to_os_string(), value.as_ref().to_os_string()));
         self
     }
 

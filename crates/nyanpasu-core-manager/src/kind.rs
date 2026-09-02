@@ -68,10 +68,7 @@ pub async fn check_config(spec: &InstanceSpec) -> Result<(), Error> {
 }
 
 #[cfg(feature = "test-hooks")]
-pub async fn check_config_within(
-    spec: &InstanceSpec,
-    timeout: Duration,
-) -> Result<(), Error> {
+pub async fn check_config_within(spec: &InstanceSpec, timeout: Duration) -> Result<(), Error> {
     run_check(spec, timeout).await
 }
 

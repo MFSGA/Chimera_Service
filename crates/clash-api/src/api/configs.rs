@@ -34,7 +34,9 @@ pub enum TunStack {
     Unknown,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize, specta::Type)]
+#[derive(
+    Clone, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize, specta::Type,
+)]
 #[serde(default, rename_all = "kebab-case")]
 pub struct GeoUrls {
     pub geo_ip: String,
@@ -43,7 +45,9 @@ pub struct GeoUrls {
     pub geo_site: String,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize, specta::Type)]
+#[derive(
+    Clone, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize, specta::Type,
+)]
 #[serde(default)]
 pub struct BrutalOptions {
     pub enabled: bool,
@@ -51,7 +55,9 @@ pub struct BrutalOptions {
     pub down: String,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize, specta::Type)]
+#[derive(
+    Clone, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize, specta::Type,
+)]
 #[serde(default)]
 pub struct MuxOptions {
     pub padding: bool,
@@ -176,7 +182,9 @@ impl Default for RuntimeTun {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize, specta::Type)]
+#[derive(
+    Clone, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize, specta::Type,
+)]
 #[serde(default, rename_all = "kebab-case")]
 pub struct RuntimeTuicServer {
     pub enable: bool,
@@ -256,11 +264,17 @@ pub struct UpdateConfigRequest {
 
 impl UpdateConfigRequest {
     pub fn from_path(path: impl Into<String>) -> Self {
-        Self { path: path.into(), payload: String::new() }
+        Self {
+            path: path.into(),
+            payload: String::new(),
+        }
     }
 
     pub fn from_payload(payload: impl Into<String>) -> Self {
-        Self { path: String::new(), payload: payload.into() }
+        Self {
+            path: String::new(),
+            payload: payload.into(),
+        }
     }
 }
 
@@ -269,7 +283,9 @@ pub struct UpdateConfigOptions {
     pub force: bool,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize, specta::Type)]
+#[derive(
+    Clone, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize, specta::Type,
+)]
 #[serde(default, rename_all = "kebab-case")]
 pub struct ConfigPatch {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -323,7 +339,9 @@ pub struct ConfigPatch {
     pub interface_name: Option<String>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize, specta::Type)]
+#[derive(
+    Clone, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize, specta::Type,
+)]
 #[serde(default, rename_all = "kebab-case")]
 pub struct TunPatch {
     pub enable: bool,
@@ -420,7 +438,9 @@ pub struct TunPatch {
     pub sendmsgx: Option<bool>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize, specta::Type)]
+#[derive(
+    Clone, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize, specta::Type,
+)]
 #[serde(default, rename_all = "kebab-case")]
 pub struct TuicServerPatch {
     pub enable: bool,
@@ -498,7 +518,10 @@ mod tests {
 
     #[test]
     fn empty_patch_serializes_as_an_empty_object() {
-        assert_eq!(serde_json::to_string(&ConfigPatch::default()).unwrap(), "{}");
+        assert_eq!(
+            serde_json::to_string(&ConfigPatch::default()).unwrap(),
+            "{}"
+        );
     }
 
     #[test]

@@ -21,4 +21,3 @@ pub fn service_config_dir() -> PathBuf {
 pub fn service_pid_file() -> PathBuf {
     chimera_utils::dirs::suggest_service_data_dir(consts::APP_NAME).join(PID_FILE_NAME)
 }
-

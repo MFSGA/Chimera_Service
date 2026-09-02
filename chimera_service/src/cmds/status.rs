@@ -76,9 +76,7 @@ pub async fn status(ctx: StatusCommand) -> Result<(), CommandError> {
     if ctx.exit_code {
         return match info.status {
             chimera_ipc::types::ServiceStatus::Running => Ok(()),
-            chimera_ipc::types::ServiceStatus::Stopped => {
-                Err(CommandError::ServiceAlreadyStopped)
-            }
+            chimera_ipc::types::ServiceStatus::Stopped => Err(CommandError::ServiceAlreadyStopped),
             chimera_ipc::types::ServiceStatus::NotInstalled => {
                 Err(CommandError::ServiceNotInstalled)
             }

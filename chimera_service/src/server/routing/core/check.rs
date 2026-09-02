@@ -22,7 +22,11 @@ pub async fn check(
         );
     };
 
-    match state.core_manager.check(&payload.core_type, config_file).await {
+    match state
+        .core_manager
+        .check(&payload.core_type, config_file)
+        .await
+    {
         Ok(()) => (StatusCode::OK, Json(RBuilder::success(()))),
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,

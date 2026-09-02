@@ -60,7 +60,10 @@ async fn patch_updates_generation_without_restarting_the_epoch() {
     manager.start(spec(&root, initial)).await.unwrap();
     let before = manager.status();
     let before_revision = before.revision.unwrap();
-    let CoreState::Running { pid: before_pid, .. } = before.state else {
+    let CoreState::Running {
+        pid: before_pid, ..
+    } = before.state
+    else {
         panic!("expected running state")
     };
 
@@ -111,7 +114,10 @@ async fn reload_updates_generation_without_restarting_the_epoch() {
     manager.start(spec(&root, initial)).await.unwrap();
     let before = manager.status();
     let before_revision = before.revision.unwrap();
-    let CoreState::Running { pid: before_pid, .. } = before.state else {
+    let CoreState::Running {
+        pid: before_pid, ..
+    } = before.state
+    else {
         panic!("expected running state")
     };
 
@@ -170,7 +176,10 @@ async fn installed_patch_reports_parent_sync_uncertainty_without_losing_the_outc
     };
     assert!(matches!(*outcome, ApplyOutcome::Patched { .. }));
     assert!(warning.contains("parent-directory synchronization failed"));
-    assert!(matches!(manager.status().state, CoreState::Running { epoch: 1, .. }));
+    assert!(matches!(
+        manager.status().state,
+        CoreState::Running { epoch: 1, .. }
+    ));
     manager.shutdown().await.unwrap();
 }
 
@@ -204,7 +213,10 @@ async fn patch_verification_mismatch_falls_back_to_a_restart() {
     manager.start(spec(&root, initial)).await.unwrap();
     let before_status = manager.status();
     let before = before_status.revision.unwrap();
-    let CoreState::Running { pid: before_pid, .. } = before_status.state else {
+    let CoreState::Running {
+        pid: before_pid, ..
+    } = before_status.state
+    else {
         panic!("expected running state")
     };
     let outcome = manager
@@ -219,6 +231,9 @@ async fn patch_verification_mismatch_falls_back_to_a_restart() {
     let CoreState::Running { pid: after_pid, .. } = manager.status().state else {
         panic!("expected running state")
     };
-    assert_ne!(before_pid, after_pid, "fallback restart must replace the process");
+    assert_ne!(
+        before_pid, after_pid,
+        "fallback restart must replace the process"
+    );
     manager.shutdown().await.unwrap();
 }

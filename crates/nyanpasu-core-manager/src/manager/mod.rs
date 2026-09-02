@@ -47,7 +47,9 @@ pub enum DegradeReason {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SwitchOutcome {
     Graceful,
-    Hard { reason: DegradeReason },
+    Hard {
+        reason: DegradeReason,
+    },
     DurabilityUncertain {
         outcome: Box<SwitchOutcome>,
         warning: String,
@@ -56,12 +58,24 @@ pub enum SwitchOutcome {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApplyOutcome {
-    Started { revision: ConfigRevision },
-    Noop { revision: ConfigRevision },
-    Patched { revision: ConfigRevision },
-    Reloaded { revision: ConfigRevision },
-    Restarted { revision: ConfigRevision },
-    Switched { revision: ConfigRevision },
+    Started {
+        revision: ConfigRevision,
+    },
+    Noop {
+        revision: ConfigRevision,
+    },
+    Patched {
+        revision: ConfigRevision,
+    },
+    Reloaded {
+        revision: ConfigRevision,
+    },
+    Restarted {
+        revision: ConfigRevision,
+    },
+    Switched {
+        revision: ConfigRevision,
+    },
     RolledBack {
         revision: ConfigRevision,
         failed_apply: String,
@@ -575,9 +589,7 @@ impl CoreManager {
 
         let snapshot = ConfigSnapshot::load(&spec.config_path).await?;
         let resolved = self.resolve_core_features(&spec.core).await?;
-        let local_controller = resolved
-            .runtime
-            .contains(crate::RuntimeFeature::LocalIpc);
+        let local_controller = resolved.runtime.contains(crate::RuntimeFeature::LocalIpc);
         let reason = switching::graceful_degrade_reason(
             local_controller,
             spec.core.kind,
@@ -597,7 +609,10 @@ impl CoreManager {
         let ctrl = self.inner.ctrl.lock().await;
         reject_quarantine(&ctrl)?;
         let active = ctrl.current.as_ref().ok_or(Error::NotStarted)?;
-        Ok(active.instance.probe_now(crate::ProbePhase::Reconcile).await)
+        Ok(active
+            .instance
+            .probe_now(crate::ProbePhase::Reconcile)
+            .await)
     }
 
     /// Validate a config with the selected core binary without changing the
@@ -636,7 +651,6 @@ impl CoreManager {
     pub fn options(&self) -> &ManagerOptions {
         &self.inner.options
     }
-
 }
 
 async fn sweep_orphans(store: &RuntimeConfigStore) -> Result<u64, Error> {
@@ -795,8 +809,12 @@ mod tests {
     async fn construction_resumes_after_the_highest_epoch_artifact() {
         let temp = tempfile::tempdir().unwrap();
         let root = camino::Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
-        tokio::fs::write(root.join("config-7.yaml"), b"old").await.unwrap();
-        tokio::fs::write(root.join("core-9.sock"), b"old").await.unwrap();
+        tokio::fs::write(root.join("config-7.yaml"), b"old")
+            .await
+            .unwrap();
+        tokio::fs::write(root.join("core-9.sock"), b"old")
+            .await
+            .unwrap();
         tokio::fs::write(root.join("config-noise.yaml.tmp"), b"ignored")
             .await
             .unwrap();

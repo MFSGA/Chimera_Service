@@ -32,20 +32,39 @@ pub struct RuleExtra {
 #[serde(transparent)]
 pub struct RulePatch(BTreeMap<usize, bool>);
 impl RulePatch {
-    pub fn new() -> Self { Self::default() }
-    pub fn set_disabled(&mut self, index: usize, disabled: bool) -> &mut Self { self.0.insert(index, disabled); self }
-    pub fn is_empty(&self) -> bool { self.0.is_empty() }
+    pub fn new() -> Self {
+        Self::default()
+    }
+    pub fn set_disabled(&mut self, index: usize, disabled: bool) -> &mut Self {
+        self.0.insert(index, disabled);
+        self
+    }
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Deserialize, serde::Serialize, specta::Type)]
 #[serde(transparent)]
 pub struct RuleProviderName(String);
 impl RuleProviderName {
-    pub fn new(value: impl Into<String>) -> Self { Self(value.into()) }
-    pub fn as_str(&self) -> &str { &self.0 }
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
-impl From<&str> for RuleProviderName { fn from(value: &str) -> Self { Self(value.to_owned()) } }
-impl From<String> for RuleProviderName { fn from(value: String) -> Self { Self(value) } }
+impl From<&str> for RuleProviderName {
+    fn from(value: &str) -> Self {
+        Self(value.to_owned())
+    }
+}
+impl From<String> for RuleProviderName {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize, specta::Type)]
 pub enum RuleProviderBehavior {
@@ -58,7 +77,13 @@ pub enum RuleProviderBehavior {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize, specta::Type)]
-pub enum RuleFormat { YamlRule, TextRule, MrsRule, #[serde(other)] Unknown }
+pub enum RuleFormat {
+    YamlRule,
+    TextRule,
+    MrsRule,
+    #[serde(other)]
+    Unknown,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
@@ -75,24 +100,47 @@ pub struct RuleProvider {
     pub payload: Option<Vec<String>>,
 }
 
-#[derive(serde::Deserialize)] struct RuleList { rules: Vec<Rule> }
-#[derive(serde::Deserialize)] struct RuleProviderMap { providers: IndexMap<RuleProviderName, RuleProvider> }
+#[derive(serde::Deserialize)]
+struct RuleList {
+    rules: Vec<Rule>,
+}
+#[derive(serde::Deserialize)]
+struct RuleProviderMap {
+    providers: IndexMap<RuleProviderName, RuleProvider>,
+}
 
 impl Client {
     pub async fn rules(&self) -> Result<Vec<Rule>> {
-        let result: RuleList = self.send_json(RequestMetadata::new("rules", Method::GET, true), || self.get("/rules/")).await?;
+        let result: RuleList = self
+            .send_json(RequestMetadata::new("rules", Method::GET, true), || {
+                self.get("/rules/")
+            })
+            .await?;
         Ok(result.rules)
     }
     pub async fn patch_rules(&self, patch: &RulePatch) -> Result<()> {
-        self.send_empty(RequestMetadata::new("patch_rules", Method::PATCH, false), || Ok(self.patch("/rules/disable")?.json(patch))).await
+        self.send_empty(
+            RequestMetadata::new("patch_rules", Method::PATCH, false),
+            || Ok(self.patch("/rules/disable")?.json(patch)),
+        )
+        .await
     }
     pub async fn rule_providers(&self) -> Result<IndexMap<RuleProviderName, RuleProvider>> {
-        let result: RuleProviderMap = self.send_json(RequestMetadata::new("rule_providers", Method::GET, true), || self.get("/providers/rules/")).await?;
+        let result: RuleProviderMap = self
+            .send_json(
+                RequestMetadata::new("rule_providers", Method::GET, true),
+                || self.get("/providers/rules/"),
+            )
+            .await?;
         Ok(result.providers)
     }
     pub async fn update_rule_provider(&self, provider: &RuleProviderName) -> Result<()> {
         let url = self.endpoint_with_segments("/providers/rules", [provider.as_str(), ""])?;
-        self.send_empty(RequestMetadata::new("update_rule_provider", Method::PUT, false), || Ok(self.request_url(Method::PUT, url.clone()))).await
+        self.send_empty(
+            RequestMetadata::new("update_rule_provider", Method::PUT, false),
+            || Ok(self.request_url(Method::PUT, url.clone())),
+        )
+        .await
     }
 }
 
@@ -103,6 +151,9 @@ mod tests {
     fn rule_patch_serializes_indices_as_keys() {
         let mut patch = RulePatch::new();
         patch.set_disabled(12, true).set_disabled(3, false);
-        assert_eq!(serde_json::to_value(patch).unwrap(), serde_json::json!({"3": false, "12": true}));
+        assert_eq!(
+            serde_json::to_value(patch).unwrap(),
+            serde_json::json!({"3": false, "12": true})
+        );
     }
 }

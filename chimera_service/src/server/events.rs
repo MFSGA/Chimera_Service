@@ -75,7 +75,10 @@ mod tests {
         let mut events = hub.subscribe();
         let mut logs = hub.subscribe_logs();
         hub.send(Event::new_core_state_changed(CoreState::Running));
-        assert!(matches!(events.try_recv(), Ok(Event::CoreStateChanged(CoreState::Running))));
+        assert!(matches!(
+            events.try_recv(),
+            Ok(Event::CoreStateChanged(CoreState::Running))
+        ));
         assert!(matches!(logs.try_recv(), Err(TryRecvError::Empty)));
 
         let sent = frame(1);
@@ -95,7 +98,10 @@ mod tests {
             hub.send_log(frame(epoch));
         }
 
-        assert!(matches!(events.recv().await, Ok(Event::CoreStateChanged(CoreState::Running))));
+        assert!(matches!(
+            events.recv().await,
+            Ok(Event::CoreStateChanged(CoreState::Running))
+        ));
         assert!(matches!(logs.recv().await, Err(RecvError::Lagged(_))));
     }
 }

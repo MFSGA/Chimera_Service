@@ -62,7 +62,9 @@ pub(crate) async fn spawn(command: Command) -> Result<SpawnParts, ProcessError> 
         program,
         message: error.to_string(),
     })?;
-    let pid = child.id().ok_or_else(|| ProcessError::Engine("spawned child has no pid".into()))?;
+    let pid = child
+        .id()
+        .ok_or_else(|| ProcessError::Engine("spawned child has no pid".into()))?;
     let owned_pid_record = match epoch_pid_file {
         Some(spec) => match publish_spawned_pid_record(pid, &spec).await {
             Ok(record) => Some((spec.path().to_path_buf(), record)),
@@ -87,18 +89,8 @@ pub(crate) async fn spawn(command: Command) -> Result<SpawnParts, ProcessError> 
     let (ctrl_tx, mut ctrl_rx) = mpsc::channel(64);
     let (terminated_tx, terminated_rx) = watch::channel(None);
     let encoding = command.encoding;
-    let mut stdout_task = tokio::spawn(pump_lines(
-        stdout,
-        encoding,
-        true,
-        events_tx.clone(),
-    ));
-    let mut stderr_task = tokio::spawn(pump_lines(
-        stderr,
-        encoding,
-        false,
-        events_tx.clone(),
-    ));
+    let mut stdout_task = tokio::spawn(pump_lines(stdout, encoding, true, events_tx.clone()));
+    let mut stderr_task = tokio::spawn(pump_lines(stderr, encoding, false, events_tx.clone()));
     let timeout_at = command
         .timeout
         .map(|timeout| tokio::time::Instant::now() + timeout);
@@ -345,7 +337,11 @@ mod tests {
 
     #[tokio::test]
     async fn captures_a_successful_command() {
-        let output = Command::new("rustc").arg("--version").output().await.unwrap();
+        let output = Command::new("rustc")
+            .arg("--version")
+            .output()
+            .await
+            .unwrap();
         assert!(output.success());
         assert!(output.stdout.contains("rustc"));
         assert!(output.stderr.is_empty());
@@ -470,11 +466,7 @@ mod tests {
 
     #[tokio::test]
     async fn piped_stdin_is_written_and_flushed() {
-        let (handle, mut events) = stdin_echo_command()
-            .pipe_stdin(true)
-            .spawn()
-            .await
-            .unwrap();
+        let (handle, mut events) = stdin_echo_command().pipe_stdin(true).spawn().await.unwrap();
         handle.write_stdin(b"hello from stdin\n").await.unwrap();
         let echoed = tokio::time::timeout(Duration::from_secs(5), async {
             while let Some(event) = events.recv().await {

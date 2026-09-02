@@ -14,9 +14,9 @@ use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 use tokio::sync::{broadcast, watch};
 
 use crate::{
+    ProbePhase, ProbeResult,
     error::Error,
     log::LogFrame,
-    ProbePhase, ProbeResult,
     spec::{InstanceSpec, ResolvedController},
     state::InstanceStatus,
 };

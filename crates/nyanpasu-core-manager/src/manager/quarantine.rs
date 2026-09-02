@@ -5,12 +5,7 @@ use crate::{Error, state::CoreState};
 use super::{CoreManager, Ctrl, QuarantinedEpoch};
 
 impl CoreManager {
-    pub(super) fn latch_quarantine(
-        &self,
-        ctrl: &mut Ctrl,
-        epoch: u64,
-        error: &Error,
-    ) {
+    pub(super) fn latch_quarantine(&self, ctrl: &mut Ctrl, epoch: u64, error: &Error) {
         record_quarantine(ctrl, epoch, error.to_string());
         let quarantine = quarantine_error(ctrl).expect("quarantine was just inserted");
         self.inner.publish(
@@ -156,27 +151,42 @@ mod tests {
         tokio::fs::write(runtime.join("core-4.sock"), b"old")
             .await
             .unwrap();
-        manager.inner.ctrl.lock().await.quarantine.push(QuarantinedEpoch {
-            epoch: 4,
-            reason: "uncertain stop".into(),
-            death_proven: true,
-        });
+        manager
+            .inner
+            .ctrl
+            .lock()
+            .await
+            .quarantine
+            .push(QuarantinedEpoch {
+                epoch: 4,
+                reason: "uncertain stop".into(),
+                death_proven: true,
+            });
 
         manager.recover_quarantine().await.unwrap();
         assert!(manager.inner.ctrl.lock().await.quarantine.is_empty());
         assert!(!runtime.join("config-4.yaml").exists());
         assert!(!runtime.join("core-4.sock").exists());
-        assert!(matches!(manager.status().state, CoreState::Stopped { reason: None }));
+        assert!(matches!(
+            manager.status().state,
+            CoreState::Stopped { reason: None }
+        ));
     }
 
     #[tokio::test]
     async fn missing_authoritative_pid_record_keeps_the_latch_closed() {
         let (manager, _temp, _runtime) = manager().await;
-        manager.inner.ctrl.lock().await.quarantine.push(QuarantinedEpoch {
-            epoch: 5,
-            reason: "uncertain stop".into(),
-            death_proven: false,
-        });
+        manager
+            .inner
+            .ctrl
+            .lock()
+            .await
+            .quarantine
+            .push(QuarantinedEpoch {
+                epoch: 5,
+                reason: "uncertain stop".into(),
+                death_proven: false,
+            });
 
         assert!(matches!(
             manager.recover_quarantine().await,
@@ -203,11 +213,17 @@ mod tests {
         )
         .await
         .unwrap();
-        manager.inner.ctrl.lock().await.quarantine.push(QuarantinedEpoch {
-            epoch: 6,
-            reason: "uncertain stop".into(),
-            death_proven: false,
-        });
+        manager
+            .inner
+            .ctrl
+            .lock()
+            .await
+            .quarantine
+            .push(QuarantinedEpoch {
+                epoch: 6,
+                reason: "uncertain stop".into(),
+                death_proven: false,
+            });
 
         manager.recover_quarantine().await.unwrap();
         assert!(!pid.exists());

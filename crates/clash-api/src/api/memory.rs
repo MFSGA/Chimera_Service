@@ -2,7 +2,9 @@ use reqwest::Method;
 
 use crate::{Client, HttpStream, Result, retry::RequestMetadata};
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize, specta::Type)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize, specta::Type,
+)]
 pub struct Memory {
     #[serde(rename = "inuse")]
     pub in_use: u64,
@@ -13,10 +15,17 @@ pub struct Memory {
 impl Client {
     pub async fn memory(&self) -> Result<HttpStream<Memory>> {
         const OPERATION: &str = "memory";
-        let response = self.send(RequestMetadata::new(OPERATION, Method::GET, true), || self.get("/memory")).await?;
+        let response = self
+            .send(RequestMetadata::new(OPERATION, Method::GET, true), || {
+                self.get("/memory")
+            })
+            .await?;
         Ok(HttpStream::from_response(response, OPERATION))
     }
     pub async fn memory_ws(&self) -> Result<reqwest_websocket::WebSocket> {
-        self.websocket(RequestMetadata::new("memory_ws", Method::GET, true), || self.get("/memory")).await
+        self.websocket(RequestMetadata::new("memory_ws", Method::GET, true), || {
+            self.get("/memory")
+        })
+        .await
     }
 }

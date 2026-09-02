@@ -5,14 +5,10 @@ mod manager_bridge;
 mod manager_projection;
 mod routing;
 
-use chimera_ipc::{
-    SERVICE_PLACEHOLDER,
-    api::ws::events::Event as WsEvent,
-    server::create_server,
-};
-pub use manager_bridge::CoreManagerService as CoreManager;
-pub use logger::Logger;
+use chimera_ipc::{SERVICE_PLACEHOLDER, api::ws::events::Event as WsEvent, server::create_server};
 use events::EventHub;
+pub use logger::Logger;
+pub use manager_bridge::CoreManagerService as CoreManager;
 use routing::{AppState, create_router};
 use tokio_util::sync::CancellationToken;
 use tracing_attributes::instrument;
@@ -29,9 +25,7 @@ pub async fn run(
     let control_watch = core_manager.clone();
     let control_failure_token = token.clone();
     tokio::spawn(async move {
-        if control_watch.until_control_closed().await
-            == nyanpasu_core_manager::ExecutorExit::Died
-        {
+        if control_watch.until_control_closed().await == nyanpasu_core_manager::ExecutorExit::Died {
             tracing::error!("core control executor died; stopping the service");
             control_failure_token.cancel();
         }

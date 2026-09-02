@@ -7,9 +7,9 @@ use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
+    ProbeHandle, ProbePhase, ProbeResult,
     error::Error,
     instance::Instance,
-    ProbeHandle, ProbePhase, ProbeResult,
     spec::{InstanceSpec, ResolvedController},
     state::InstanceStatus,
 };

@@ -1,7 +1,6 @@
 mod helpers;
 mod prepare;
 
-use helpers::with_durability;
 use crate::{
     Error, ProbePhase,
     capability::ResolvedFeatures,
@@ -10,6 +9,7 @@ use crate::{
     spec::InstanceSpec,
     state::{CoreState, SpecSummary},
 };
+use helpers::with_durability;
 
 use super::{
     CoreManager, DegradeReason, SwitchOutcome, abort_and_await, quarantine::reject_quarantine,
@@ -49,8 +49,15 @@ impl CoreManager {
             .filter(|active| !active.instance.state().borrow().state.is_terminal())
             .map(|active| active.instance.epoch())
             .ok_or(Error::NotStarted)?;
-        let epoch = self.inner.epoch.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-        let plan = match self.prepare_graceful(spec, epoch, &snapshot, resolved).await {
+        let epoch = self
+            .inner
+            .epoch
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1;
+        let plan = match self
+            .prepare_graceful(spec, epoch, &snapshot, resolved)
+            .await
+        {
             Ok(plan) => plan,
             Err(error) => {
                 let _ = self.inner.store.cleanup_epoch(epoch).await;
@@ -249,15 +256,14 @@ impl CoreManager {
             capabilities,
             runtime_features,
         );
-        let result = self
-            .inner
-            .store
-            .cleanup_epoch(old_epoch)
-            .await
-            .map(|()| SwitchOutcome::Hard {
-                reason: DegradeReason::PatchFailed,
-            });
+        let result =
+            self.inner
+                .store
+                .cleanup_epoch(old_epoch)
+                .await
+                .map(|()| SwitchOutcome::Hard {
+                    reason: DegradeReason::PatchFailed,
+                });
         with_durability(result, durability_warning)
     }
-
 }

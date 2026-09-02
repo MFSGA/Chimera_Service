@@ -121,9 +121,7 @@ pub struct ProcessIdentity {
 }
 
 /// Inspect a live process and bind its PID to executable and start time.
-pub async fn inspect_process_identity(
-    pid: u32,
-) -> std::io::Result<Option<ProcessIdentity>> {
+pub async fn inspect_process_identity(pid: u32) -> std::io::Result<Option<ProcessIdentity>> {
     const ATTEMPTS: usize = 20;
     const DELAY: std::time::Duration = std::time::Duration::from_millis(25);
 
@@ -266,8 +264,7 @@ fn process_identity_from_handle(
         .ok_or_else(|| identity_error(format!("cannot resolve executable for live pid {pid}")))?;
     Ok(ProcessIdentity {
         executable: executable.to_owned(),
-        start_token: (u64::from(creation.dwHighDateTime) << 32)
-            | u64::from(creation.dwLowDateTime),
+        start_token: (u64::from(creation.dwHighDateTime) << 32) | u64::from(creation.dwLowDateTime),
     })
 }
 
@@ -412,10 +409,7 @@ pub async fn publish_epoch_pid_file(
         .file_name()
         .and_then(|name| name.to_str())
         .ok_or_else(|| invalid_input("pid filename must be UTF-8"))?;
-    let temp = parent.join(format!(
-        ".{file_name}.tmp-{}-{counter}",
-        std::process::id()
-    ));
+    let temp = parent.join(format!(".{file_name}.tmp-{}-{counter}", std::process::id()));
     let result = async {
         let mut file = tokio::fs::OpenOptions::new()
             .create_new(true)
@@ -484,7 +478,9 @@ pub async fn reap_epoch_pid_file(
         .parent()
         .ok_or_else(|| invalid_input("runtime config has no parent directory"))?;
     if tokio::fs::canonicalize(runtime_parent).await? != runtime_dir {
-        return Err(invalid_input("runtime config escapes the runtime directory"));
+        return Err(invalid_input(
+            "runtime config escapes the runtime directory",
+        ));
     }
     let runtime_epoch = epoch_from_file_name(&record.runtime_config, "config-", ".yaml")?;
     if runtime_epoch != epoch {
@@ -763,7 +759,10 @@ mod tests {
     #[test]
     fn epoch_record_round_trips() {
         let record = record();
-        assert_eq!(EpochPidRecord::decode(&record.encode().unwrap()).unwrap(), record);
+        assert_eq!(
+            EpochPidRecord::decode(&record.encode().unwrap()).unwrap(),
+            record
+        );
     }
 
     #[test]
@@ -772,7 +771,8 @@ mod tests {
             EpochPidRecord::decode("pid=1\n").unwrap_err().kind(),
             std::io::ErrorKind::InvalidData
         );
-        let duplicate = "version=2\npid=1\npid=2\nepoch=1\nexecutable=61\nstart-token=1\nruntime-config=61\n";
+        let duplicate =
+            "version=2\npid=1\npid=2\nepoch=1\nexecutable=61\nstart-token=1\nruntime-config=61\n";
         assert_eq!(
             EpochPidRecord::decode(duplicate).unwrap_err().kind(),
             std::io::ErrorKind::InvalidData
@@ -781,12 +781,18 @@ mod tests {
 
     #[test]
     fn unknown_versions_and_invalid_hex_are_rejected() {
-        let encoded = record().encode().unwrap().replace("version=2", "version=99");
+        let encoded = record()
+            .encode()
+            .unwrap()
+            .replace("version=2", "version=99");
         assert_eq!(
             EpochPidRecord::decode(&encoded).unwrap_err().kind(),
             std::io::ErrorKind::InvalidData
         );
-        let encoded = record().encode().unwrap().replace("executable=", "executable=z");
+        let encoded = record()
+            .encode()
+            .unwrap()
+            .replace("executable=", "executable=z");
         assert_eq!(
             EpochPidRecord::decode(&encoded).unwrap_err().kind(),
             std::io::ErrorKind::InvalidData
@@ -800,11 +806,13 @@ mod tests {
         let record = record();
         publish_epoch_pid_file(&path, &record).await.unwrap();
         assert_eq!(read_epoch_pid_file(&path).await.unwrap(), Some(record));
-        assert!(dir
-            .path()
-            .read_dir()
-            .unwrap()
-            .all(|entry| !entry.unwrap().file_name().to_string_lossy().contains(".tmp-")));
+        assert!(dir.path().read_dir().unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains(".tmp-")
+        }));
     }
 
     #[tokio::test]
@@ -833,9 +841,16 @@ mod tests {
         stale.pid = 1;
         publish_epoch_pid_file(&path, &current).await.unwrap();
 
-        remove_epoch_pid_file_if_matches(&path, &stale).await.unwrap();
-        assert_eq!(read_epoch_pid_file(&path).await.unwrap(), Some(current.clone()));
-        remove_epoch_pid_file_if_matches(&path, &current).await.unwrap();
+        remove_epoch_pid_file_if_matches(&path, &stale)
+            .await
+            .unwrap();
+        assert_eq!(
+            read_epoch_pid_file(&path).await.unwrap(),
+            Some(current.clone())
+        );
+        remove_epoch_pid_file_if_matches(&path, &current)
+            .await
+            .unwrap();
         assert_eq!(read_epoch_pid_file(&path).await.unwrap(), None);
     }
 

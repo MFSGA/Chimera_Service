@@ -10,8 +10,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use nyanpasu_core_manager::{
     ApplyOutcome, CoreKind, CoreManager, CoreSpec, CoreState, DnsController, DnsError, DnsIntent,
     DnsOverrideRecord, DnsOverrideState, Error, InstanceOptions, InstanceSpec, ManagerOptions,
-    RevisionId,
-    runtime::BoxFuture,
+    RevisionId, runtime::BoxFuture,
 };
 
 struct FakeDns {
@@ -159,11 +158,7 @@ async fn orphan_record_is_restored_during_construction() {
         owner_generation: None,
         state: DnsOverrideState::Applied,
     };
-    std::fs::write(
-        record_path(&root),
-        serde_json::to_vec(&orphan).unwrap(),
-    )
-    .unwrap();
+    std::fs::write(record_path(&root), serde_json::to_vec(&orphan).unwrap()).unwrap();
 
     let dns = Arc::new(FakeDns::default());
     let manager = manager_with_dns(&root, dns.clone()).await;

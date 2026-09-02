@@ -1,4 +1,8 @@
-use std::{path::Path, sync::{Arc, Mutex}, time::Duration};
+use std::{
+    path::Path,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use camino::{Utf8Path, Utf8PathBuf};
 use chimera_ipc::api::{
@@ -16,9 +20,8 @@ use chimera_utils::core::{ClashCoreType, CoreType};
 use nyanpasu_core_manager::{
     ApplyOutcome, ConfigInput, ControlOptions, CoreCommand, CoreCommandEnvelope, CoreControl,
     CoreError as ControlError, CoreKind, CoreManager, CoreSpec, Error as ManagerError,
-    ExecutorExit,
-    InstanceOptions, InstanceSpec, ManagerOptions, OperationHandle, OperationId, OperationOutput,
-    OperationState, ReconcileRequest,
+    ExecutorExit, InstanceOptions, InstanceSpec, ManagerOptions, OperationHandle, OperationId,
+    OperationOutput, OperationState, ReconcileRequest,
 };
 use tokio::sync::{Semaphore, broadcast, watch};
 use tokio_util::sync::CancellationToken;
@@ -104,10 +107,13 @@ impl CoreManagerService {
         cancel_token: CancellationToken,
     ) -> Result<Self, anyhow::Error> {
         let runtime_dir = Utf8PathBuf::from_path_buf(runtime.service_data_dir.join("core-runtime"))
-            .map_err(|path| anyhow::anyhow!("runtime directory is not UTF-8: {}", path.display()))?;
-        let working_dir = Utf8PathBuf::from_path_buf(runtime.nyanpasu_data_dir.clone()).map_err(
-            |path| anyhow::anyhow!("working directory is not UTF-8: {}", path.display()),
-        )?;
+            .map_err(|path| {
+                anyhow::anyhow!("runtime directory is not UTF-8: {}", path.display())
+            })?;
+        let working_dir =
+            Utf8PathBuf::from_path_buf(runtime.nyanpasu_data_dir.clone()).map_err(|path| {
+                anyhow::anyhow!("working directory is not UTF-8: {}", path.display())
+            })?;
         let source_dir = runtime_dir.join("v2-sources");
         let manager = CoreManager::new(ManagerOptions {
             runtime_dir: Some(runtime_dir),
@@ -163,10 +169,13 @@ impl CoreManagerService {
             core_type,
             canonical_config_path(config_path.as_std_path()).await?,
         )?;
-        self.manager.start(spec).await.map_err(|error| match error {
-            ManagerError::AlreadyRunning => anyhow::anyhow!("core is already running"),
-            other => other.into(),
-        })?;
+        self.manager
+            .start(spec)
+            .await
+            .map_err(|error| match error {
+                ManagerError::AlreadyRunning => anyhow::anyhow!("core is already running"),
+                other => other.into(),
+            })?;
         self.publish_requested_core(Some(core_type));
         Ok(())
     }
@@ -179,10 +188,14 @@ impl CoreManagerService {
     }
 
     pub async fn restart(&self) -> Result<(), anyhow::Error> {
-        self.manager.restart().await.map(|_| ()).map_err(|error| match error {
-            ManagerError::NotStarted => anyhow::anyhow!("core have not been started yet"),
-            other => other.into(),
-        })
+        self.manager
+            .restart()
+            .await
+            .map(|_| ())
+            .map_err(|error| match error {
+                ManagerError::NotStarted => anyhow::anyhow!("core have not been started yet"),
+                other => other.into(),
+            })
     }
 
     pub async fn check(
@@ -358,9 +371,13 @@ impl CoreManagerService {
         let binary_path = Utf8PathBuf::from_path_buf(binary_path).map_err(|path| {
             OperationError::plain(format!("core binary path is not UTF-8: {}", path.display()))
         })?;
-        let working_dir = Utf8PathBuf::from_path_buf(infos.nyanpasu_data_dir.clone()).map_err(
-            |path| OperationError::plain(format!("working directory is not UTF-8: {}", path.display())),
-        )?;
+        let working_dir =
+            Utf8PathBuf::from_path_buf(infos.nyanpasu_data_dir.clone()).map_err(|path| {
+                OperationError::plain(format!(
+                    "working directory is not UTF-8: {}",
+                    path.display()
+                ))
+            })?;
         Ok(InstanceSpec {
             core: CoreSpec {
                 kind: core_kind(core_type)?,
@@ -400,7 +417,9 @@ fn map_operation(id: OperationId, state: OperationState) -> OperationInfo {
             OperationPhase::Failed,
             None,
             Some(OperationErrorInfo {
-                kind: failure.kind.map(|kind| std::borrow::Cow::Borrowed(kind.as_str())),
+                kind: failure
+                    .kind
+                    .map(|kind| std::borrow::Cow::Borrowed(kind.as_str())),
                 message: failure.message,
                 retryable: failure.retryable,
             }),
@@ -471,7 +490,10 @@ fn core_kind(core_type: &CoreType) -> Result<CoreKind, OperationError> {
     }
 }
 
-fn find_binary_path(infos: &RuntimeInfos, core_type: &CoreType) -> std::io::Result<std::path::PathBuf> {
+fn find_binary_path(
+    infos: &RuntimeInfos,
+    core_type: &CoreType,
+) -> std::io::Result<std::path::PathBuf> {
     for directory in [&infos.nyanpasu_data_dir, &infos.nyanpasu_app_dir] {
         let candidate = directory.join(core_type.get_executable_name());
         if candidate.exists() {
@@ -508,10 +530,8 @@ mod tests {
 
     #[test]
     fn only_not_found_errors_receive_the_config_kind() {
-        let missing = map_config_path_error(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "missing",
-        ));
+        let missing =
+            map_config_path_error(std::io::Error::new(std::io::ErrorKind::NotFound, "missing"));
         assert_eq!(missing.kind(), Some(CoreErrorKind::ConfigNotFound));
 
         let denied = map_config_path_error(std::io::Error::new(

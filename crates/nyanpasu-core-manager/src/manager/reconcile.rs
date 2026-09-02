@@ -25,9 +25,9 @@ impl CoreManager {
         let running = {
             let ctrl = self.inner.ctrl.lock().await;
             reject_quarantine(&ctrl)?;
-            ctrl.current.as_ref().is_some_and(|active| {
-                !active.instance.state().borrow().state.is_terminal()
-            })
+            ctrl.current
+                .as_ref()
+                .is_some_and(|active| !active.instance.state().borrow().state.is_terminal())
         };
         let result = if running {
             self.apply_config_inner(spec, expected_applied).await
@@ -48,9 +48,10 @@ impl CoreManager {
         };
 
         let mut ctrl = self.inner.ctrl.lock().await;
-        let runtime_alive = ctrl.current.as_ref().is_some_and(|active| {
-            !active.instance.state().borrow().state.is_terminal()
-        });
+        let runtime_alive = ctrl
+            .current
+            .as_ref()
+            .is_some_and(|active| !active.instance.state().borrow().state.is_terminal());
         if result.is_ok() || !runtime_alive {
             self.dns_converge(&mut ctrl).await;
         }

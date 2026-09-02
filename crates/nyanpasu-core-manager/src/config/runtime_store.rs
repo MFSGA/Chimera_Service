@@ -153,11 +153,7 @@ impl RuntimeConfigStore {
         .map_err(Error::from)
     }
 
-    pub async fn stage(
-        &self,
-        epoch: u64,
-        contents: &[u8],
-    ) -> Result<StagedRuntimeConfig, Error> {
+    pub async fn stage(&self, epoch: u64, contents: &[u8]) -> Result<StagedRuntimeConfig, Error> {
         let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
         let path = self.dir.join(format!(
             ".config-{epoch}.yaml.tmp-{}-{counter}",
@@ -204,11 +200,7 @@ impl RuntimeConfigStore {
         Ok(target)
     }
 
-    pub async fn replace(
-        &self,
-        epoch: u64,
-        contents: &[u8],
-    ) -> Result<RuntimeConfigCommit, Error> {
+    pub async fn replace(&self, epoch: u64, contents: &[u8]) -> Result<RuntimeConfigCommit, Error> {
         let staged = self.stage(epoch, contents).await?;
         self.commit_replace(staged, epoch).await
     }
@@ -243,11 +235,7 @@ impl RuntimeConfigStore {
         Ok(installed_commit(target, parent_sync))
     }
 
-    pub async fn backup(
-        &self,
-        epoch: u64,
-        generation: u64,
-    ) -> Result<RuntimeConfigBackup, Error> {
+    pub async fn backup(&self, epoch: u64, generation: u64) -> Result<RuntimeConfigBackup, Error> {
         let target = self.runtime_path(epoch);
         atomic_fs::validate_existing_regular_target(&target).await?;
         let contents = tokio::fs::read(&target).await?;

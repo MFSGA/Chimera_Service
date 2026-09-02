@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
+use super::{CoreManager, Logger, consts::RuntimeInfos, events::EventHub};
 use axum::Router;
 use tracing_attributes::instrument;
-use super::{CoreManager, Logger, consts::RuntimeInfos, events::EventHub};
 
 pub mod core;
 pub mod logs;

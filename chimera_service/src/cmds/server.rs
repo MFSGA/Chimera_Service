@@ -1,4 +1,8 @@
-use std::{collections::BTreeSet, path::PathBuf, sync::{Arc, OnceLock}};
+use std::{
+    collections::BTreeSet,
+    path::PathBuf,
+    sync::{Arc, OnceLock},
+};
 
 #[cfg(windows)]
 use anyhow::Context;

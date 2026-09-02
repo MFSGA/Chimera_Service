@@ -207,7 +207,11 @@ async fn every_operation_is_mounted_at_its_contract_address() {
     ] {
         let status = probe(env.state.clone(), method, path).await;
         assert_ne!(status, StatusCode::NOT_FOUND, "{path} not mounted");
-        assert_ne!(status, StatusCode::METHOD_NOT_ALLOWED, "wrong method for {path}");
+        assert_ne!(
+            status,
+            StatusCode::METHOD_NOT_ALLOWED,
+            "wrong method for {path}"
+        );
     }
 }
 
@@ -334,11 +338,16 @@ async fn v2_submit_and_long_poll_observe_the_same_operation() {
     .await;
     assert_eq!(operation.status(), StatusCode::OK);
     let envelope: CoreOperationRes<'static> = body_of(operation).await;
-    let terminal = envelope.data.expect("operation query returns registry state");
+    let terminal = envelope
+        .data
+        .expect("operation query returns registry state");
     assert_eq!(terminal.id, id);
     assert_eq!(terminal.phase, OperationPhase::Failed);
     assert_eq!(
-        terminal.error.as_ref().and_then(|error| error.kind.as_deref()),
+        terminal
+            .error
+            .as_ref()
+            .and_then(|error| error.kind.as_deref()),
         Some("not_started")
     );
 }

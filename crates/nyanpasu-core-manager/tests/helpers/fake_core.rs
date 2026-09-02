@@ -52,9 +52,7 @@ async fn main() {
             .or_else(|| behavior_u64(&document, "check-delay-ms"))
             .unwrap_or_default();
         std::thread::sleep(Duration::from_millis(delay));
-        if raw.contains("reject: true")
-            || behavior_string(&document, "check-fail").is_some()
-        {
+        if raw.contains("reject: true") || behavior_string(&document, "check-fail").is_some() {
             eprintln!("fake core rejected config");
             std::process::exit(1);
         }
@@ -145,7 +143,8 @@ fn serve_local(document: &Mapping, ctx: Arc<Context>) -> bool {
         served = true;
         let unix_ctx = ctx.clone();
         let _ = std::fs::remove_file(&path);
-        let listener = std::os::unix::net::UnixListener::bind(&path).expect("bind fake unix controller");
+        let listener =
+            std::os::unix::net::UnixListener::bind(&path).expect("bind fake unix controller");
         listener.set_nonblocking(true).expect("set nonblocking");
         let listener = tokio::net::UnixListener::from_std(listener).expect("tokio unix listener");
         tokio::spawn(async move {
@@ -192,7 +191,8 @@ where
             }
             if !ctx.behavior.patch_no_effect {
                 let patch: serde_json::Value = serde_json::from_str(&body).expect("PATCH json");
-                let Value::Mapping(patch) = serde_yaml_ng::to_value(patch).expect("PATCH yaml") else {
+                let Value::Mapping(patch) = serde_yaml_ng::to_value(patch).expect("PATCH yaml")
+                else {
                     panic!("PATCH must be a mapping");
                 };
                 let mut runtime = ctx.runtime.lock().await;
@@ -206,7 +206,8 @@ where
                 return;
             }
             let request: serde_json::Value = serde_json::from_str(&body).expect("PUT json");
-            let desired = if let Some(path) = request.get("path").and_then(serde_json::Value::as_str)
+            let desired = if let Some(path) =
+                request.get("path").and_then(serde_json::Value::as_str)
                 && !path.is_empty()
             {
                 std::fs::read_to_string(path).expect("read PUT config path")
@@ -290,8 +291,16 @@ fn runtime_config_json(document: &Mapping) -> String {
             .get(Value::String(key.into()))
             .and_then(|value| serde_json::to_value(value).ok())
     };
-    let integer = |key: &str| value(key).and_then(|value| value.as_i64()).unwrap_or_default();
-    let boolean = |key: &str| value(key).and_then(|value| value.as_bool()).unwrap_or(false);
+    let integer = |key: &str| {
+        value(key)
+            .and_then(|value| value.as_i64())
+            .unwrap_or_default()
+    };
+    let boolean = |key: &str| {
+        value(key)
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false)
+    };
     let string = |key: &str, default: &str| {
         value(key)
             .and_then(|value| value.as_str().map(str::to_owned))
@@ -356,7 +365,10 @@ fn merge_mapping(target: &mut Mapping, patch: &Mapping) {
 
 fn parse_mapping(raw: &str) -> Mapping {
     let value: Value = serde_yaml_ng::from_str(raw).expect("parse fake core config");
-    value.as_mapping().cloned().expect("top-level config mapping")
+    value
+        .as_mapping()
+        .cloned()
+        .expect("top-level config mapping")
 }
 
 fn behavior(document: &Mapping) -> Behavior {
@@ -377,13 +389,11 @@ fn behavior_mapping(document: &Mapping) -> Option<&Mapping> {
 }
 
 fn behavior_string(document: &Mapping, key: &str) -> Option<String> {
-    behavior_mapping(document)
-        .and_then(|mapping| config_string(mapping, key))
+    behavior_mapping(document).and_then(|mapping| config_string(mapping, key))
 }
 
 fn behavior_u64(document: &Mapping, key: &str) -> Option<u64> {
-    behavior_mapping(document)
-        .and_then(|mapping| config_u64(mapping, key))
+    behavior_mapping(document).and_then(|mapping| config_u64(mapping, key))
 }
 
 fn behavior_bool(document: &Mapping, key: &str) -> bool {
@@ -394,7 +404,9 @@ fn behavior_bool(document: &Mapping, key: &str) -> bool {
 }
 
 fn configured_lines(document: &Mapping, single: &str, multiple: &str) -> Vec<String> {
-    let mut lines = config_string(document, single).into_iter().collect::<Vec<_>>();
+    let mut lines = config_string(document, single)
+        .into_iter()
+        .collect::<Vec<_>>();
     if let Some(values) = behavior_mapping(document)
         .and_then(|mapping| mapping.get(Value::String(multiple.into())))
         .and_then(Value::as_sequence)

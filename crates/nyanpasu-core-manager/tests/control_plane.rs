@@ -4,7 +4,8 @@ use camino::{Utf8Path, Utf8PathBuf};
 use nyanpasu_core_manager::{
     ApplyOutcome, CheckRequest, ConfigInput, ControlOptions, CoreCommand, CoreCommandEnvelope,
     CoreControl, CoreErrorKind, CoreKind, CoreManager, CoreSpec, CoreState, ExecutorExit,
-    InstanceOptions, ManagerOptions, OperationId, OperationOutput, OperationState, ReconcileRequest,
+    InstanceOptions, ManagerOptions, OperationId, OperationOutput, OperationState,
+    ReconcileRequest,
 };
 
 fn free_port() -> u16 {

@@ -213,9 +213,24 @@ fn windows_move_file(
     unsafe extern "system" {
         fn MoveFileExW(existing: *const u16, new: *const u16, flags: u32) -> i32;
     }
-    let source: Vec<u16> = source.as_ref().as_os_str().encode_wide().chain(iter::once(0)).collect();
-    let target: Vec<u16> = target.as_ref().as_os_str().encode_wide().chain(iter::once(0)).collect();
-    let flags = MOVEFILE_WRITE_THROUGH | if replace { MOVEFILE_REPLACE_EXISTING } else { 0 };
+    let source: Vec<u16> = source
+        .as_ref()
+        .as_os_str()
+        .encode_wide()
+        .chain(iter::once(0))
+        .collect();
+    let target: Vec<u16> = target
+        .as_ref()
+        .as_os_str()
+        .encode_wide()
+        .chain(iter::once(0))
+        .collect();
+    let flags = MOVEFILE_WRITE_THROUGH
+        | if replace {
+            MOVEFILE_REPLACE_EXISTING
+        } else {
+            0
+        };
     if unsafe { MoveFileExW(source.as_ptr(), target.as_ptr(), flags) } == 0 {
         Err(std::io::Error::last_os_error().into())
     } else {
@@ -239,14 +254,29 @@ fn windows_replace_file(
             reserved: *mut core::ffi::c_void,
         ) -> i32;
     }
-    let source: Vec<u16> = source.as_ref().as_os_str().encode_wide().chain(iter::once(0)).collect();
-    let target: Vec<u16> = target.as_ref().as_os_str().encode_wide().chain(iter::once(0)).collect();
+    let source: Vec<u16> = source
+        .as_ref()
+        .as_os_str()
+        .encode_wide()
+        .chain(iter::once(0))
+        .collect();
+    let target: Vec<u16> = target
+        .as_ref()
+        .as_os_str()
+        .encode_wide()
+        .chain(iter::once(0))
+        .collect();
     if unsafe {
         ReplaceFileW(
-            target.as_ptr(), source.as_ptr(), std::ptr::null(), 0,
-            std::ptr::null_mut(), std::ptr::null_mut(),
+            target.as_ptr(),
+            source.as_ptr(),
+            std::ptr::null(),
+            0,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
         )
-    } == 0 {
+    } == 0
+    {
         Err(std::io::Error::last_os_error().into())
     } else {
         Ok(())

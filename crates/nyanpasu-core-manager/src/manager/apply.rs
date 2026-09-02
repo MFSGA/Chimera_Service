@@ -1,15 +1,14 @@
 use crate::{
-    Error, RuntimeInstance, RuntimeLaunchRequest,
+    Error, RuntimeConfigBackup, RuntimeInstance, RuntimeLaunchRequest,
     capability::ResolvedFeatures,
     config::{ConfigSnapshot, PreparedConfig},
     spec::{InstanceSpec, ResolvedController},
     state::{ConfigRevision, CoreState, SpecSummary},
-    RuntimeConfigBackup,
 };
 
 use super::{
-    Active, ApplyOutcome, CoreManager, abort_and_await,
-    publish::spawn_forwarder, quarantine::reject_quarantine,
+    Active, ApplyOutcome, CoreManager, abort_and_await, publish::spawn_forwarder,
+    quarantine::reject_quarantine,
 };
 
 impl CoreManager {
@@ -128,9 +127,8 @@ impl CoreManager {
             if let Some(warning) = commit.durability_warning() {
                 durability_warnings.push(warning.to_owned());
             }
-            let reconciled = match tokio::time::timeout(
-                self.inner.options.reconcile_timeout,
-                async {
+            let reconciled =
+                match tokio::time::timeout(self.inner.options.reconcile_timeout, async {
                     let ctrl = self.inner.ctrl.lock().await;
                     let active = ctrl.current.as_ref().ok_or(Error::NotStarted)?;
                     Ok::<bool, Error>(
@@ -142,18 +140,17 @@ impl CoreManager {
                         )
                         .await,
                     )
-                },
-            )
-            .await
-            {
-                Ok(result) => result?,
-                Err(_) => {
-                    tracing::warn!(
-                        "in-place reconciliation timed out; falling back to restart"
-                    );
-                    false
-                }
-            };
+                })
+                .await
+                {
+                    Ok(result) => result?,
+                    Err(_) => {
+                        tracing::warn!(
+                            "in-place reconciliation timed out; falling back to restart"
+                        );
+                        false
+                    }
+                };
             if reconciled {
                 let mut revision = previous_revision.clone();
                 revision.generation += 1;
@@ -226,12 +223,13 @@ impl CoreManager {
                 .await
             {
                 Ok(()) => {
-                    let revision = self.status().revision.ok_or_else(|| {
-                        Error::ApplyRollbackFailed {
-                            apply: apply_error.to_string(),
-                            rollback: "rollback epoch has no revision".into(),
-                        }
-                    })?;
+                    let revision =
+                        self.status()
+                            .revision
+                            .ok_or_else(|| Error::ApplyRollbackFailed {
+                                apply: apply_error.to_string(),
+                                rollback: "rollback epoch has no revision".into(),
+                            })?;
                     Ok(wrap_apply_warnings(
                         ApplyOutcome::RolledBack {
                             revision,
@@ -356,22 +354,27 @@ impl CoreManager {
             }
             Err(apply_error) => {
                 let apply_text = apply_error.to_string();
-                let restore = self.inner.store.restore(&backup).await.map_err(|restore_error| {
-                    let error = Error::ApplyRollbackFailed {
-                        apply: apply_text.clone(),
-                        rollback: format!("runtime restore failed: {restore_error}"),
-                    };
-                    self.inner.publish(
-                        CoreState::Stopped {
-                            reason: Some(crate::StopReason::Error(error.to_string())),
-                        },
-                        None,
-                        None,
-                        None,
-                        None,
-                    );
-                    error
-                })?;
+                let restore = self
+                    .inner
+                    .store
+                    .restore(&backup)
+                    .await
+                    .map_err(|restore_error| {
+                        let error = Error::ApplyRollbackFailed {
+                            apply: apply_text.clone(),
+                            rollback: format!("runtime restore failed: {restore_error}"),
+                        };
+                        self.inner.publish(
+                            CoreState::Stopped {
+                                reason: Some(crate::StopReason::Error(error.to_string())),
+                            },
+                            None,
+                            None,
+                            None,
+                            None,
+                        );
+                        error
+                    })?;
                 if let Some(warning) = restore.durability_warning() {
                     durability_warnings.push(warning.to_owned());
                 }

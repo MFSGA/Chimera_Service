@@ -60,10 +60,7 @@ async fn reconcile_starts_cold_then_noops_on_the_same_config() {
     };
     assert!(matches!(manager.status().state, CoreState::Running { .. }));
 
-    let outcome = manager
-        .reconcile(spec, Some(revision.id()))
-        .await
-        .unwrap();
+    let outcome = manager.reconcile(spec, Some(revision.id())).await.unwrap();
     assert!(matches!(outcome, ApplyOutcome::Noop { .. }));
 
     manager.shutdown().await.unwrap();

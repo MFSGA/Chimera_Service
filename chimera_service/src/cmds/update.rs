@@ -79,8 +79,8 @@ pub async fn update(ctx: UpdateCommand) -> Result<(), CommandError> {
     let service_binary =
         service_data_dir.join(format!("{}{}", APP_NAME, std::env::consts::EXE_SUFFIX));
     let binary_exists = service_binary.exists();
-    let client_version = Version::parse(APP_VERSION)
-        .map_err(|error| CommandError::Other(error.into()))?;
+    let client_version =
+        Version::parse(APP_VERSION).map_err(|error| CommandError::Other(error.into()))?;
     let installed = if binary_exists {
         Client::service_default()
             .status()

@@ -4,7 +4,10 @@ use tokio::sync::watch;
 
 use crate::{
     HealthStatus,
-    state::{ConfigRevision, CoreState, CoreStatus, HealthState, InstanceState, InstanceStatus, SpecSummary, now_ms},
+    state::{
+        ConfigRevision, CoreState, CoreStatus, HealthState, InstanceState, InstanceStatus,
+        SpecSummary, now_ms,
+    },
 };
 
 use super::Inner;
@@ -20,7 +23,8 @@ impl Inner {
     ) {
         self.status_tx.send_modify(|status| {
             let lifecycle_changed = status.state != state;
-            let health = health.or_else(|| default_health_for_state(status.health.as_ref(), &state));
+            let health =
+                health.or_else(|| default_health_for_state(status.health.as_ref(), &state));
             status.state = state;
             status.health = health;
             status.spec = spec;
@@ -186,12 +190,14 @@ mod tests {
                 .map(|health| health.state),
             Some(HealthState::Healthy)
         );
-        assert!(default_health_for_state(
-            None,
-            &CoreState::Stopped {
-                reason: Some(StopReason::User)
-            }
-        )
-        .is_none());
+        assert!(
+            default_health_for_state(
+                None,
+                &CoreState::Stopped {
+                    reason: Some(StopReason::User)
+                }
+            )
+            .is_none()
+        );
     }
 }

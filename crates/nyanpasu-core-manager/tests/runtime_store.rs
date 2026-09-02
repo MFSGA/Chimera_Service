@@ -21,16 +21,28 @@ async fn backup_restore_and_cleanup_form_one_epoch_transaction() {
 
     let staged = store.stage(3, b"allow-lan: false\n").await.unwrap();
     let runtime = store.commit_new(staged, 3).await.unwrap();
-    assert_eq!(tokio::fs::read_to_string(&runtime).await.unwrap(), "allow-lan: false\n");
+    assert_eq!(
+        tokio::fs::read_to_string(&runtime).await.unwrap(),
+        "allow-lan: false\n"
+    );
 
     let backup = store.backup(3, 2).await.unwrap();
     assert!(backup.path().exists());
     let commit = store.replace(3, b"allow-lan: true\n").await.unwrap();
-    assert!(matches!(commit.durability(), RuntimeCommitDurability::Durable));
-    assert_eq!(tokio::fs::read_to_string(commit.path()).await.unwrap(), "allow-lan: true\n");
+    assert!(matches!(
+        commit.durability(),
+        RuntimeCommitDurability::Durable
+    ));
+    assert_eq!(
+        tokio::fs::read_to_string(commit.path()).await.unwrap(),
+        "allow-lan: true\n"
+    );
 
     store.restore(&backup).await.unwrap();
-    assert_eq!(tokio::fs::read_to_string(&runtime).await.unwrap(), "allow-lan: false\n");
+    assert_eq!(
+        tokio::fs::read_to_string(&runtime).await.unwrap(),
+        "allow-lan: false\n"
+    );
     store.remove_backup(backup).await.unwrap();
     assert_eq!(store.artifact_epochs().await.unwrap(), vec![3]);
 

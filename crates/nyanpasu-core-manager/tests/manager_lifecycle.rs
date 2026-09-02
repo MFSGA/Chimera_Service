@@ -93,7 +93,10 @@ async fn managed_epoch_runs_from_preflight_through_cleanup() {
             .await,
         Err(Error::RevisionConflict { .. })
     ));
-    assert!(matches!(manager.status().state, CoreState::Running { epoch: 1, .. }));
+    assert!(matches!(
+        manager.status().state,
+        CoreState::Running { epoch: 1, .. }
+    ));
     assert!(matches!(
         manager.start(spec.clone()).await,
         Err(Error::AlreadyRunning)
@@ -107,7 +110,10 @@ async fn managed_epoch_runs_from_preflight_through_cleanup() {
         }
     );
     let restarted = manager.status();
-    assert!(matches!(restarted.state, CoreState::Running { epoch: 2, .. }));
+    assert!(matches!(
+        restarted.state,
+        CoreState::Running { epoch: 2, .. }
+    ));
     let restarted_revision = restarted.revision.expect("restarted revision");
     assert!(restarted_revision.runtime_path.exists());
     assert!(!revision.runtime_path.exists());
@@ -119,7 +125,10 @@ async fn managed_epoch_runs_from_preflight_through_cleanup() {
         }
     );
     let switched = manager.status();
-    assert!(matches!(switched.state, CoreState::Running { epoch: 3, .. }));
+    assert!(matches!(
+        switched.state,
+        CoreState::Running { epoch: 3, .. }
+    ));
     let switched_revision = switched.revision.expect("switched revision");
     assert!(switched_revision.runtime_path.exists());
     assert!(!restarted_revision.runtime_path.exists());
@@ -179,8 +188,14 @@ async fn failed_apply_rolls_back_to_the_previous_spec() {
     };
     assert_eq!(revision.epoch, 3);
     assert!(failed_apply.contains("failed to start") || failed_apply.contains("stopped before"));
-    assert!(matches!(manager.status().state, CoreState::Running { epoch: 3, .. }));
-    assert_eq!(manager.status().spec.unwrap().config_path, original.config_path);
+    assert!(matches!(
+        manager.status().state,
+        CoreState::Running { epoch: 3, .. }
+    ));
+    assert_eq!(
+        manager.status().spec.unwrap().config_path,
+        original.config_path
+    );
     manager.stop().await.unwrap();
 }
 
@@ -210,7 +225,10 @@ async fn restart_survives_a_normal_stop() {
             reason: DegradeReason::NotRunning
         }
     );
-    assert!(matches!(manager.status().state, CoreState::Running { epoch: 2, .. }));
+    assert!(matches!(
+        manager.status().state,
+        CoreState::Running { epoch: 2, .. }
+    ));
     manager.shutdown().await.unwrap();
 }
 
@@ -235,12 +253,18 @@ async fn failed_start_reports_the_core_diagnostic_tail() {
     .await
     .unwrap();
 
-    let error = manager.start(fake_core_spec(&root, source)).await.unwrap_err();
+    let error = manager
+        .start(fake_core_spec(&root, source))
+        .await
+        .unwrap_err();
     let tail = match error {
         Error::StartupFailed { stderr_tail } | Error::StartupTimeout { stderr_tail } => stderr_tail,
         other => panic!("expected startup failure with diagnostics: {other:?}"),
     };
-    assert!(tail.contains("fatal startup detail"), "diagnostic tail: {tail}");
+    assert!(
+        tail.contains("fatal startup detail"),
+        "diagnostic tail: {tail}"
+    );
     manager.shutdown().await.unwrap();
 }
 
@@ -268,11 +292,18 @@ async fn core_logs_are_archived_and_flushed_on_shutdown() {
     let mut archived = String::new();
     for entry in std::fs::read_dir(log_dir).unwrap() {
         let entry = entry.unwrap();
-        if entry.path().extension().is_some_and(|extension| extension == "jsonl") {
+        if entry
+            .path()
+            .extension()
+            .is_some_and(|extension| extension == "jsonl")
+        {
             archived.push_str(&std::fs::read_to_string(entry.path()).unwrap());
         }
     }
-    assert!(archived.contains("fake core started"), "archive: {archived}");
+    assert!(
+        archived.contains("fake core started"),
+        "archive: {archived}"
+    );
     assert!(archived.contains("\"t\":\"log\""), "archive: {archived}");
 }
 
@@ -327,7 +358,10 @@ async fn source_mutation_during_preflight_cannot_change_the_apply() {
     };
     let (outcome, ()) = tokio::join!(apply, mutate);
     let outcome = outcome.unwrap();
-    assert!(matches!(outcome, ApplyOutcome::Switched { .. } | ApplyOutcome::Restarted { .. }));
+    assert!(matches!(
+        outcome,
+        ApplyOutcome::Switched { .. } | ApplyOutcome::Restarted { .. }
+    ));
     assert!(matches!(manager.status().state, CoreState::Running { .. }));
     manager.shutdown().await.unwrap();
 }

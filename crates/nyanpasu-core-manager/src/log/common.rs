@@ -20,11 +20,7 @@ pub(super) fn parse_rfc3339_ms(raw: &str) -> Option<i64> {
         .map(|timestamp| timestamp.timestamp_millis())
 }
 
-pub(super) fn local_unix_ms(
-    date: NaiveDate,
-    time: NaiveTime,
-    offset: &FixedOffset,
-) -> Option<i64> {
+pub(super) fn local_unix_ms(date: NaiveDate, time: NaiveTime, offset: &FixedOffset) -> Option<i64> {
     offset
         .from_local_datetime(&date.and_time(time))
         .single()
