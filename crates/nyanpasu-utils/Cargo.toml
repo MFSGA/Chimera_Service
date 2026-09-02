@@ -1,0 +1,29 @@
+[package]
+name = "nyanpasu-utils"
+version = "0.1.0"
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[dependencies]
+encoding_rs = "0.8"
+kill_tree = { version = "0.2.4", features = ["tokio"] }
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
+[target.'cfg(windows)'.dependencies]
+windows.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
+[target.'cfg(all(not(windows), not(target_os = "linux")))'.dependencies]
+sysinfo = "0.37"
+
+[features]
+default = []
+process = []

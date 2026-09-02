@@ -1,6 +1,11 @@
 [workspace]
 resolver = "2"
-members = ["chimera_service", "chimera_ipc", "crates/clash-api"]
+members = [
+    "chimera_service",
+    "chimera_ipc",
+    "crates/clash-api",
+    "crates/nyanpasu-utils",
+]
 
 [workspace.package]
 edition = "2024"
