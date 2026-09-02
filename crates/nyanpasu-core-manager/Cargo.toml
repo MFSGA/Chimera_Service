@@ -15,6 +15,7 @@ camino = { version = "1.1", features = ["serde1"] }
 chrono.workspace = true
 clash-api = { path = "../clash-api" }
 enumset = "1"
+parking_lot = "0.12"
 nyanpasu-core-metadata = { path = "../nyanpasu-core-metadata" }
 nyanpasu-utils = { path = "../nyanpasu-utils", features = ["process"] }
 serde.workspace = true
@@ -24,6 +25,7 @@ thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
+zerocopy = { version = "0.8", features = ["derive", "simd"] }
 
 [features]
 default = []

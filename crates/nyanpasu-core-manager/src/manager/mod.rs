@@ -68,6 +68,7 @@ pub enum ApplyOutcome {
     },
 }
 
+#[derive(Clone)]
 pub struct CoreManager {
     inner: Arc<Inner>,
 }
