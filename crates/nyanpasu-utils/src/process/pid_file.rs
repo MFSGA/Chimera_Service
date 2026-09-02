@@ -106,6 +106,13 @@ impl EpochPidRecord {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OrphanReapOutcome {
+    NotFound,
+    AlreadyExited,
+    Killed,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProcessIdentity {
     pub executable: String,
@@ -454,6 +461,216 @@ pub async fn remove_epoch_pid_file_if_matches(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error),
     }
+}
+
+/// Reap a recorded orphan only after proving the full epoch and process identity.
+pub async fn reap_epoch_pid_file(
+    path: impl AsRef<Path>,
+    runtime_dir: impl AsRef<Path>,
+) -> std::io::Result<OrphanReapOutcome> {
+    let path = path.as_ref();
+    let runtime_dir = tokio::fs::canonicalize(runtime_dir.as_ref()).await?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| invalid_input("pid file has no parent directory"))?;
+    if tokio::fs::canonicalize(parent).await? != runtime_dir {
+        return Err(invalid_input("pid file escapes the runtime directory"));
+    }
+    let epoch = epoch_from_file_name(path, "core-", ".pid")?;
+    let Some(record) = read_epoch_pid_file(path).await? else {
+        return Ok(OrphanReapOutcome::NotFound);
+    };
+    if record.epoch != epoch {
+        return Err(invalid_data("pid filename and embedded epoch differ"));
+    }
+    let runtime_parent = record
+        .runtime_config
+        .parent()
+        .ok_or_else(|| invalid_input("runtime config has no parent directory"))?;
+    if tokio::fs::canonicalize(runtime_parent).await? != runtime_dir {
+        return Err(invalid_input("runtime config escapes the runtime directory"));
+    }
+    let runtime_epoch = epoch_from_file_name(&record.runtime_config, "config-", ".yaml")?;
+    if runtime_epoch != epoch {
+        return Err(invalid_data(
+            "runtime config filename and embedded epoch differ",
+        ));
+    }
+    validate_runtime_target(&record.runtime_config).await?;
+
+    let outcome = reap_record(&record).await?;
+    remove_epoch_pid_file_if_matches(path, &record).await?;
+    Ok(outcome)
+}
+
+async fn reap_record(record: &EpochPidRecord) -> std::io::Result<OrphanReapOutcome> {
+    let Some(identity) = inspect_process_identity(record.pid).await? else {
+        return Ok(OrphanReapOutcome::AlreadyExited);
+    };
+    if !record_matches_identity(record, &identity) {
+        return Err(identity_error(format!(
+            "cannot prove ownership of live pid {}",
+            record.pid
+        )));
+    }
+    kill_recorded_process(record).await?;
+    wait_for_recorded_exit(record).await?;
+    Ok(OrphanReapOutcome::Killed)
+}
+
+async fn wait_for_recorded_exit(record: &EpochPidRecord) -> std::io::Result<()> {
+    const ATTEMPTS: usize = 100;
+    const DELAY: std::time::Duration = std::time::Duration::from_millis(50);
+
+    for attempt in 0..ATTEMPTS {
+        match process_identity(record.pid) {
+            Ok(None) => return Ok(()),
+            Ok(Some(identity)) if !record_matches_identity(record, &identity) => return Ok(()),
+            Ok(Some(_)) => {}
+            Err(error) if identity_query_is_provisional(&error) => {}
+            Err(error) => return Err(error),
+        }
+        if attempt + 1 < ATTEMPTS {
+            tokio::time::sleep(DELAY).await;
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::TimedOut,
+        format!("recorded pid {} did not exit", record.pid),
+    ))
+}
+
+#[cfg(windows)]
+async fn kill_recorded_process(record: &EpochPidRecord) -> std::io::Result<()> {
+    use windows::Win32::System::Threading::{
+        PROCESS_ACCESS_RIGHTS, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
+        TerminateProcess,
+    };
+
+    const PROCESS_SYNCHRONIZE: PROCESS_ACCESS_RIGHTS = PROCESS_ACCESS_RIGHTS(0x0010_0000);
+    let handle = open_process(
+        record.pid,
+        PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE | PROCESS_SYNCHRONIZE,
+    )?;
+    let identity = process_identity_from_handle(&handle, record.pid)?;
+    if !record_matches_identity(record, &identity) {
+        return Err(identity_error(format!(
+            "cannot prove ownership of live pid {}",
+            record.pid
+        )));
+    }
+    unsafe { TerminateProcess(handle.0, 1) }.map_err(windows_io_error)
+}
+
+#[cfg(target_os = "linux")]
+async fn kill_recorded_process(record: &EpochPidRecord) -> std::io::Result<()> {
+    let pidfd = LinuxPidFd::open(record.pid)?;
+    let identity = process_identity(record.pid)?.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("pid {} exited before pidfd validation", record.pid),
+        )
+    })?;
+    if !record_matches_identity(record, &identity) {
+        return Err(identity_error(format!(
+            "cannot prove ownership of live pid {}",
+            record.pid
+        )));
+    }
+    pidfd.kill()
+}
+
+#[cfg(target_os = "linux")]
+struct LinuxPidFd(std::os::fd::RawFd);
+
+#[cfg(target_os = "linux")]
+impl LinuxPidFd {
+    fn open(pid: u32) -> std::io::Result<Self> {
+        let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid as libc::pid_t, 0_u32) };
+        if fd < 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(Self(fd as std::os::fd::RawFd))
+        }
+    }
+
+    fn kill(&self) -> std::io::Result<()> {
+        let result = unsafe {
+            libc::syscall(
+                libc::SYS_pidfd_send_signal,
+                self.0,
+                libc::SIGKILL,
+                std::ptr::null::<libc::siginfo_t>(),
+                0_u32,
+            )
+        };
+        if result < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::ESRCH) {
+                Ok(())
+            } else {
+                Err(error)
+            }
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for LinuxPidFd {
+    fn drop(&mut self) {
+        unsafe { libc::close(self.0) };
+    }
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+async fn kill_recorded_process(record: &EpochPidRecord) -> std::io::Result<()> {
+    let identity = process_identity(record.pid)?.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("pid {} exited before final validation", record.pid),
+        )
+    })?;
+    if !record_matches_identity(record, &identity) {
+        return Err(identity_error(format!(
+            "cannot prove ownership of live pid {}",
+            record.pid
+        )));
+    }
+    kill_tree::tokio::kill_tree(record.pid)
+        .await
+        .map(|_| ())
+        .map_err(|error| std::io::Error::other(error.to_string()))
+}
+
+async fn validate_runtime_target(path: &Path) -> std::io::Result<()> {
+    match tokio::fs::symlink_metadata(path).await {
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(invalid_input(format!(
+            "runtime config must not be a symlink: {}",
+            path.display()
+        ))),
+        Ok(metadata) if !metadata.is_file() => Err(invalid_input(format!(
+            "runtime config must be a regular file: {}",
+            path.display()
+        ))),
+        Ok(_) => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+fn epoch_from_file_name(path: &Path, prefix: &str, suffix: &str) -> std::io::Result<u64> {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| invalid_input("epoch artifact filename must be UTF-8"))?;
+    let epoch = name
+        .strip_prefix(prefix)
+        .and_then(|value| value.strip_suffix(suffix))
+        .ok_or_else(|| invalid_input(format!("invalid epoch artifact name `{name}`")))?;
+    epoch
+        .parse()
+        .map_err(|_| invalid_input(format!("invalid epoch in artifact name `{name}`")))
 }
 
 async fn validate_pid_target(path: &Path) -> std::io::Result<()> {

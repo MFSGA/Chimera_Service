@@ -13,9 +13,9 @@ pub use error::{ProcessError, ProcessOutput};
 pub use event::{ProcessEvent, TerminatedPayload};
 pub use handle::{Containment, ProcessHandle};
 pub use pid_file::{
-    EpochPidFile, EpochPidRecord, ProcessIdentity, inspect_process_identity,
-    publish_epoch_pid_file, read_epoch_pid_file, record_matches_identity,
-    remove_epoch_pid_file_if_matches,
+    EpochPidFile, EpochPidRecord, OrphanReapOutcome, ProcessIdentity,
+    inspect_process_identity, publish_epoch_pid_file, read_epoch_pid_file,
+    reap_epoch_pid_file, record_matches_identity, remove_epoch_pid_file_if_matches,
 };
 pub use supervisor::{
     Backoff, ReadinessProbe, RestartPolicy, RestartStormPolicy, Supervisor, SupervisorBuilder,
