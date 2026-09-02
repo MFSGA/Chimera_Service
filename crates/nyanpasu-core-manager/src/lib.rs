@@ -4,6 +4,7 @@ mod capability;
 mod error;
 mod health;
 pub mod kind;
+pub mod manager;
 pub mod spec;
 pub mod state;
 
@@ -14,6 +15,7 @@ pub use health::{
     probe::{HealthProbe, ProbeContext, ProbeFuture, ProbeHandle, ProbePhase, ProbeResult},
 };
 pub use clash_api::Host;
+pub use manager::{ApplyOutcome, CoreManager, CoreManagerBuilder, DegradeReason, SwitchOutcome};
 pub use spec::{
     CoreSpec, InstanceOptions, InstanceSpec, LocalIpcPolicy, ManagerOptions, ResolvedController,
 };
