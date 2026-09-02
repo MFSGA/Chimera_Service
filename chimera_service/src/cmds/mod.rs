@@ -2,10 +2,13 @@
 use crate::logging;
 use clap::{Parser, Subcommand};
 
+mod completions;
 mod install;
+mod restart;
 mod rpc;
 mod status;
 mod uninstall;
+mod update;
 
 mod server;
 mod start;
@@ -21,7 +24,14 @@ pub use server::SHUTDOWN_TOKEN as SERVER_SHUTDOWN_TOKEN;
 /// rpc subcommands are shortcuts for client rpc calls,
 /// It is useful for testing and debugging service rpc calls.
 #[derive(Parser)]
-#[command(version, author, about, long_about, disable_version_flag = true)]
+#[command(
+    version,
+    author,
+    about,
+    long_about,
+    disable_version_flag = true,
+    arg_required_else_help = true
+)]
 struct Cli {
     /// Enable verbose logging
     #[clap(short = 'V', long, default_value = "false")]
@@ -45,13 +55,20 @@ enum Commands {
     Start,
     /// Stop the service
     Stop,
+    /// Restart the service
+    Restart,
     /// Run the server. It should be called by the service manager.
     Server(server::ServerContext), // The main entry point for the service, other commands are the control plane for the service
     /// Get the status of the service
     Status(status::StatusCommand),
+    /// Update the installed service binary
+    Update(update::UpdateCommand),
     /// RPC commands, a shortcut for client rpc calls
     #[command(subcommand)]
     Rpc(rpc::RpcCommand),
+    /// Print a shell completion script on stdout
+    #[command(hide = true)]
+    Completions(completions::CompletionsCommand),
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -77,17 +94,24 @@ pub enum CommandError {
     Other(#[from] anyhow::Error),
 }
 
+fn is_unprivileged(command: &Option<Commands>) -> bool {
+    match command {
+        None
+        | Some(Commands::Status(_))
+        | Some(Commands::Rpc(_))
+        | Some(Commands::Completions(_)) => true,
+        Some(Commands::Update(ctx)) => ctx.check,
+        _ => false,
+    }
+}
+
 pub async fn process() -> Result<(), CommandError> {
     let cli = Cli::parse();
     if cli.version {
         print_version();
     }
 
-    if !matches!(
-        cli.command,
-        Some(Commands::Status(_)) | Some(Commands::Rpc(_)) | None
-    ) && !crate::utils::must_check_elevation()
-    {
+    if !is_unprivileged(&cli.command) && !crate::utils::must_check_elevation() {
         return Err(CommandError::PermissionDenied);
     }
 
@@ -109,13 +133,22 @@ pub async fn process() -> Result<(), CommandError> {
         Some(Commands::Uninstall) => Ok(tokio::task::spawn_blocking(uninstall::uninstall).await??),
         Some(Commands::Start) => Ok(tokio::task::spawn_blocking(start::start).await??),
         Some(Commands::Stop) => Ok(tokio::task::spawn_blocking(stop::stop).await??),
+        Some(Commands::Restart) => Ok(tokio::task::spawn_blocking(restart::restart).await??),
         Some(Commands::Status(ctx)) => Ok(status::status(ctx).await?),
+        Some(Commands::Update(ctx)) => {
+            update::update(ctx).await?;
+            Ok(())
+        }
         Some(Commands::Server(ctx)) => {
             server::server(ctx).await?;
             Ok(())
         }
         Some(Commands::Rpc(ctx)) => {
             rpc::rpc(ctx).await?;
+            Ok(())
+        }
+        Some(Commands::Completions(ctx)) => {
+            completions::completions(ctx);
             Ok(())
         }
         None => {
@@ -186,4 +219,85 @@ pub fn print_version() {
     );
     println!("╰{:─^width$}╯", "", width = header_width);
     std::process::exit(0);
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::{CommandFactory, Parser};
+
+    use super::*;
+
+    const LEGACY_INVOCATIONS: &[&[&str]] = &[
+        &["chimera-service", "uninstall"],
+        &["chimera-service", "start"],
+        &["chimera-service", "stop"],
+        &["chimera-service", "status"],
+        &["chimera-service", "status", "--json"],
+        &["chimera-service", "status", "--skip-service-check"],
+        &["chimera-service", "rpc", "stop-core"],
+        &["chimera-service", "rpc", "restart-core"],
+        &["chimera-service", "rpc", "inspect-logs"],
+        &["chimera-service", "rpc", "retrieve-logs"],
+        &["chimera-service", "rpc", "set-dns"],
+        &["chimera-service", "-V"],
+        &["chimera-service", "-v"],
+    ];
+
+    const NEW_INVOCATIONS: &[&[&str]] = &[
+        &["chimera-service", "restart"],
+        &["chimera-service", "update", "--check"],
+        &["chimera-service", "update", "--from", "candidate.exe"],
+        &["chimera-service", "completions", "bash"],
+    ];
+
+    #[test]
+    fn cli_definition_is_consistent() {
+        Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn legacy_invocations_still_parse() {
+        for argv in LEGACY_INVOCATIONS {
+            Cli::try_parse_from(*argv)
+                .unwrap_or_else(|error| panic!("{argv:?} no longer parses:\n{error}"));
+        }
+    }
+
+    #[test]
+    fn maintenance_invocations_parse() {
+        for argv in NEW_INVOCATIONS {
+            Cli::try_parse_from(*argv)
+                .unwrap_or_else(|error| panic!("{argv:?} does not parse:\n{error}"));
+        }
+    }
+
+    #[test]
+    fn bare_invocation_displays_help() {
+        let error = Cli::try_parse_from(["chimera-service"])
+            .err()
+            .expect("bare invocation must display help");
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+        );
+    }
+
+    #[test]
+    fn only_read_only_update_skips_elevation() {
+        let check = Cli::try_parse_from(["chimera-service", "update", "--check"]).unwrap();
+        let apply = Cli::try_parse_from(["chimera-service", "update"]).unwrap();
+        assert!(is_unprivileged(&check.command));
+        assert!(!is_unprivileged(&apply.command));
+    }
+
+    #[test]
+    fn completions_remains_hidden() {
+        let command = Cli::command();
+        assert!(
+            command
+                .find_subcommand("completions")
+                .expect("completions command")
+                .is_hide_set()
+        );
+    }
 }

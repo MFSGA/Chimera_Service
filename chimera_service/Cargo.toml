@@ -47,6 +47,8 @@ thiserror.workspace = true
 anyhow = { workspace = true }
 
 clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
+semver = "1"
 
 tracing.workspace = true
 tracing-appender.workspace = true
