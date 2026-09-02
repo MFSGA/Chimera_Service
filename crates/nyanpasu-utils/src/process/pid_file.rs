@@ -745,3 +745,116 @@ fn invalid_input(message: impl Into<String>) -> std::io::Error {
 fn invalid_data(message: impl Into<String>) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::InvalidData, message.into())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn record() -> EpochPidRecord {
+        EpochPidRecord {
+            pid: 42,
+            epoch: 7,
+            executable: "core=name.exe".into(),
+            start_token: 99,
+            runtime_config: PathBuf::from(r"C:\run dir\config-7.yaml"),
+        }
+    }
+
+    #[test]
+    fn epoch_record_round_trips() {
+        let record = record();
+        assert_eq!(EpochPidRecord::decode(&record.encode().unwrap()).unwrap(), record);
+    }
+
+    #[test]
+    fn malformed_or_incomplete_records_are_rejected() {
+        assert_eq!(
+            EpochPidRecord::decode("pid=1\n").unwrap_err().kind(),
+            std::io::ErrorKind::InvalidData
+        );
+        let duplicate =
+            "version=2\npid=1\npid=2\nepoch=1\nexecutable=61\nstart-token=1\nruntime-config=61\n";
+        assert_eq!(
+            EpochPidRecord::decode(duplicate).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidData
+        );
+    }
+
+    #[test]
+    fn unknown_versions_and_invalid_hex_are_rejected() {
+        let encoded = record().encode().unwrap().replace("version=2", "version=99");
+        assert_eq!(
+            EpochPidRecord::decode(&encoded).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidData
+        );
+        let encoded = record().encode().unwrap().replace("executable=", "executable=z");
+        assert_eq!(
+            EpochPidRecord::decode(&encoded).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidData
+        );
+    }
+
+    #[tokio::test]
+    async fn publish_then_read_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("core-7.pid");
+        let record = record();
+        publish_epoch_pid_file(&path, &record).await.unwrap();
+        assert_eq!(read_epoch_pid_file(&path).await.unwrap(), Some(record));
+        assert!(dir
+            .path()
+            .read_dir()
+            .unwrap()
+            .all(|entry| !entry.unwrap().file_name().to_string_lossy().contains(".tmp-")));
+    }
+
+    #[tokio::test]
+    async fn second_publish_does_not_clobber_the_first_owner() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("core-7.pid");
+        let first = record();
+        let mut second = record();
+        second.pid = 99;
+        second.executable = "second.exe".into();
+
+        publish_epoch_pid_file(&path, &first).await.unwrap();
+        let error = publish_epoch_pid_file(&path, &second)
+            .await
+            .expect_err("existing owner must not be replaced");
+        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(read_epoch_pid_file(&path).await.unwrap(), Some(first));
+    }
+
+    #[tokio::test]
+    async fn conditional_remove_never_deletes_a_new_owner() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("core-7.pid");
+        let current = record();
+        let mut stale = record();
+        stale.pid = 1;
+        publish_epoch_pid_file(&path, &current).await.unwrap();
+
+        remove_epoch_pid_file_if_matches(&path, &stale).await.unwrap();
+        assert_eq!(read_epoch_pid_file(&path).await.unwrap(), Some(current.clone()));
+        remove_epoch_pid_file_if_matches(&path, &current).await.unwrap();
+        assert_eq!(read_epoch_pid_file(&path).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn live_identity_binds_pid_to_executable_and_start_time() {
+        let identity = inspect_process_identity(std::process::id())
+            .await
+            .unwrap()
+            .expect("the test process is live");
+        assert!(!identity.executable.is_empty());
+        assert_ne!(identity.start_token, 0);
+
+        let mut record = record();
+        record.pid = std::process::id();
+        record.executable = identity.executable.clone();
+        record.start_token = identity.start_token;
+        assert!(record_matches_identity(&record, &identity));
+        record.start_token = record.start_token.wrapping_add(1);
+        assert!(!record_matches_identity(&record, &identity));
+    }
+}
