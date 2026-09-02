@@ -1,6 +1,7 @@
 //! Cross-epoch orchestration and atomic status publication.
 
 mod apply;
+mod dns_sync;
 mod publish;
 mod quarantine;
 mod reconcile;
@@ -14,7 +15,7 @@ use std::sync::{
 use tokio::sync::{broadcast, watch};
 
 use crate::{
-    Error, LogFrame, ProbeHandle,
+    DnsController, DnsOverrideRecord, Error, LogFrame, ProbeHandle,
     capability::{ResolvedFeatures, VersionCache, resolve_features},
     config::{
         ConfigSnapshot,
@@ -80,11 +81,13 @@ pub struct CoreManagerBuilder {
     options: ManagerOptions,
     probes: ProbePlan,
     backend: Option<Arc<dyn RuntimeBackend>>,
+    dns: Option<Arc<dyn DnsController>>,
 }
 
 struct Inner {
     options: ManagerOptions,
     backend: Arc<dyn RuntimeBackend>,
+    dns: Option<Arc<dyn DnsController>>,
     store: RuntimeConfigStore,
     _runtime_lock: RuntimeDirectoryLock,
     status_tx: watch::Sender<CoreStatus>,
@@ -102,6 +105,7 @@ struct Ctrl {
     current: Option<Active>,
     last_spec: Option<InstanceSpec>,
     quarantine: Vec<QuarantinedEpoch>,
+    dns_record: Option<DnsOverrideRecord>,
 }
 
 #[derive(Debug, Clone)]
@@ -145,6 +149,13 @@ impl CoreManagerBuilder {
         self
     }
 
+    /// Inject the host DNS override component. Without one the manager keeps
+    /// zero DNS side effects and behaves exactly like the legacy path.
+    pub fn dns_controller(mut self, dns: Arc<dyn DnsController>) -> Self {
+        self.dns = Some(dns);
+        self
+    }
+
     pub async fn build(self) -> Result<CoreManager, Error> {
         CoreManager::build_configured(self).await
     }
@@ -156,6 +167,7 @@ impl CoreManager {
             options,
             probes: ProbePlan::default(),
             backend: None,
+            dns: None,
         }
     }
 
@@ -168,6 +180,7 @@ impl CoreManager {
             options,
             probes,
             backend,
+            dns,
         } = builder;
         let runtime_dir = options
             .runtime_dir
@@ -185,6 +198,7 @@ impl CoreManager {
             ("control_timeout", options.control_timeout),
             ("reconcile_timeout", options.reconcile_timeout),
             ("stop_timeout", options.stop_timeout),
+            ("dns_timeout", options.dns_timeout),
         ] {
             if timeout.is_zero() {
                 return Err(Error::InvalidManagerOptions(format!(
@@ -210,6 +224,7 @@ impl CoreManager {
             0,
         )?;
         let max_epoch = sweep_orphans(&store).await?;
+        dns_sync::reconcile_orphan_record(&store, dns.as_deref(), options.dns_timeout).await;
         let (status_tx, _) = watch::channel(CoreStatus::initial());
         let (log_tx, _) = broadcast::channel(crate::log::LOG_CHANNEL_CAPACITY);
         let (log_dir, log_sink) = if options.log_sink_enabled {
@@ -238,6 +253,7 @@ impl CoreManager {
             inner: Arc::new(Inner {
                 options,
                 backend,
+                dns,
                 store,
                 _runtime_lock: runtime_lock,
                 status_tx,
@@ -460,11 +476,19 @@ impl CoreManager {
 
     pub async fn stop(&self) -> Result<(), Error> {
         let _operation = self.inner.operation.lock().await;
+        {
+            let mut ctrl = self.inner.ctrl.lock().await;
+            self.dns_restore(&mut ctrl).await;
+        }
         self.stop_inner().await
     }
 
     pub async fn shutdown(&self) -> Result<(), Error> {
         let _operation = self.inner.operation.lock().await;
+        {
+            let mut ctrl = self.inner.ctrl.lock().await;
+            self.dns_restore(&mut ctrl).await;
+        }
         let result = match self.stop_inner().await {
             Err(Error::NotStarted) => Ok(()),
             result => result,
@@ -540,21 +564,32 @@ impl CoreManager {
                 !active.instance.state().borrow().state.is_terminal()
             })
         };
-        if running {
-            return self.apply_config_inner(spec, expected_applied).await;
-        }
-        if let Some(expected) = expected_applied {
-            return Err(Error::RevisionConflict {
+        let result = if running {
+            self.apply_config_inner(spec, expected_applied).await
+        } else if let Some(expected) = expected_applied {
+            Err(Error::RevisionConflict {
                 expected,
                 actual: None,
-            });
+            })
+        } else {
+            match self.start_inner(spec).await {
+                Ok(()) => self
+                    .status()
+                    .revision
+                    .ok_or_else(|| Error::ApplyFailed("started epoch has no revision".into()))
+                    .map(|revision| ApplyOutcome::Started { revision }),
+                Err(error) => Err(error),
+            }
+        };
+
+        let mut ctrl = self.inner.ctrl.lock().await;
+        let runtime_alive = ctrl.current.as_ref().is_some_and(|active| {
+            !active.instance.state().borrow().state.is_terminal()
+        });
+        if result.is_ok() || !runtime_alive {
+            self.dns_converge(&mut ctrl).await;
         }
-        self.start_inner(spec).await?;
-        let revision = self
-            .status()
-            .revision
-            .ok_or_else(|| Error::ApplyFailed("started epoch has no revision".into()))?;
-        Ok(ApplyOutcome::Started { revision })
+        result
     }
 
     /// Switch to a requested spec as a new epoch.

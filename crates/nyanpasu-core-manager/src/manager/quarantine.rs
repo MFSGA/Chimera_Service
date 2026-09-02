@@ -83,6 +83,7 @@ impl CoreManager {
         }
         self.inner
             .publish(CoreState::Stopped { reason: None }, None, None, None, None);
+        self.dns_restore(&mut ctrl).await;
         Ok(())
     }
 }
