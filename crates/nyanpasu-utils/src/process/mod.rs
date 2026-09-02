@@ -12,7 +12,10 @@ pub use command::Command;
 pub use error::{ProcessError, ProcessOutput};
 pub use event::{ProcessEvent, TerminatedPayload};
 pub use handle::{Containment, ProcessHandle};
-pub use pid_file::{EpochPidFile, EpochPidRecord};
+pub use pid_file::{
+    EpochPidFile, EpochPidRecord, ProcessIdentity, inspect_process_identity,
+    record_matches_identity,
+};
 pub use supervisor::{
     Backoff, ReadinessProbe, RestartPolicy, RestartStormPolicy, Supervisor, SupervisorBuilder,
     SupervisorEvent,
