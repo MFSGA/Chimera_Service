@@ -9,6 +9,7 @@ client = ["dep:axum", "dep:tokio-tungstenite"]
 specta = ["dep:specta", "chimera_utils/specta"]
 
 [dependencies]
+nyanpasu-core-metadata = { path = "../crates/nyanpasu-core-metadata" }
 chimera_utils = { workspace = true, default-features = false, features = [
     "core_manager",
     "serde",
@@ -16,7 +17,7 @@ chimera_utils = { workspace = true, default-features = false, features = [
 tokio = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
-serde = { workspace = true }
+serde = { workspace = true, features = ["rc"] }
 tracing = { workspace = true }
 derive_builder = "0.20"
 interprocess = { version = "2.3.1", features = ["tokio"] }

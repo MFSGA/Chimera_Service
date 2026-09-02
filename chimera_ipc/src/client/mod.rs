@@ -15,7 +15,7 @@ pub mod shortcuts;
 mod wrapper;
 use wrapper::BodyDataStreamExt;
 
-use crate::api::R;
+use crate::api::{CoreErrorKind, R};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ClientError<'a> {
@@ -33,6 +33,35 @@ pub enum ClientError<'a> {
     EmptyData { operation: &'static str },
     #[error("An error occurred: {0}")]
     Other(#[from] anyhow::Error),
+}
+
+impl ClientError<'_> {
+    /// Typed core-manager classification carried by a server error envelope.
+    /// Unknown future wire kinds remain available as the raw envelope string.
+    pub fn core_error_kind(&self) -> Option<CoreErrorKind> {
+        match self {
+            Self::ServerResponseFailed(envelope) => envelope
+                .error_kind
+                .as_deref()
+                .and_then(CoreErrorKind::from_wire),
+            _ => None,
+        }
+    }
+
+    /// The producer's retryability decision wins when present. Older services
+    /// omit it, so fall back to the stable error-kind default.
+    pub fn retryable(&self) -> bool {
+        match self {
+            Self::ServerResponseFailed(envelope) => envelope.retryable.unwrap_or_else(|| {
+                envelope
+                    .error_kind
+                    .as_deref()
+                    .and_then(CoreErrorKind::from_wire)
+                    .is_some_and(|kind| kind.default_retryable())
+            }),
+            _ => false,
+        }
+    }
 }
 
 pub struct Response {
@@ -95,6 +124,66 @@ pub(crate) async fn open_websocket<'a>(
         None,
     )
     .await)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::borrow::Cow;
+
+    use super::*;
+    use crate::api::ResponseCode;
+
+    #[test]
+    fn known_server_error_kind_has_a_typed_view() {
+        let error = ClientError::ServerResponseFailed(R {
+            code: ResponseCode::OtherError,
+            msg: Cow::Borrowed("conflict"),
+            data: None,
+            ts: 1,
+            error_kind: Some(Cow::Borrowed("revision_conflict")),
+            retryable: None,
+        });
+        assert_eq!(
+            error.core_error_kind(),
+            Some(CoreErrorKind::RevisionConflict)
+        );
+    }
+
+    #[test]
+    fn unknown_server_error_kind_stays_forward_compatible() {
+        let error = ClientError::ServerResponseFailed(R {
+            code: ResponseCode::OtherError,
+            msg: Cow::Borrowed("future"),
+            data: None,
+            ts: 1,
+            error_kind: Some(Cow::Borrowed("future_kind")),
+            retryable: None,
+        });
+        assert_eq!(error.core_error_kind(), None);
+    }
+
+    #[test]
+    fn explicit_retryability_overrides_kind_default() {
+        let error = ClientError::ServerResponseFailed(R {
+            code: ResponseCode::OtherError,
+            msg: Cow::Borrowed("queue rejected permanently"),
+            data: None,
+            ts: 1,
+            error_kind: Some(Cow::Borrowed("queue_full")),
+            retryable: Some(false),
+        });
+        assert!(!error.retryable());
+
+        let fallback = ClientError::ServerResponseFailed(R {
+            code: ResponseCode::OtherError,
+            msg: Cow::Borrowed("queue full"),
+            data: None,
+            ts: 1,
+            error_kind: Some(Cow::Borrowed("queue_full")),
+            retryable: None,
+        });
+        assert!(fallback.retryable());
+    }
 }
 
 impl Response {

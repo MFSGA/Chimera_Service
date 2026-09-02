@@ -101,6 +101,14 @@ pub struct CoreInfos {
     pub detail: Option<CoreStateDetail>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+pub struct LogPathsInfo {
+    pub service_dir: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub core_dir: Option<PathBuf>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct RuntimeInfos<'a> {
@@ -117,6 +125,8 @@ pub struct StatusResBody<'a> {
     pub version: Cow<'a, str>,
     pub core_infos: CoreInfos,
     pub runtime_infos: RuntimeInfos<'a>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logs: Option<LogPathsInfo>,
 }
 
 pub type StatusRes<'a> = R<'a, StatusResBody<'a>>;

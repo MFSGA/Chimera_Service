@@ -20,8 +20,9 @@ use crate::{
     api::{
         self,
         contract::{
-            CoreApply, CoreCheck, CoreRecover, CoreRestart, CoreStart, CoreStop, IpcOperation,
-            LogsInspect, LogsRetrieve, NetworkSetDns, OpResponse, Status,
+            CoreApply, CoreCheck, CoreRecover, CoreRestart, CoreStart, CoreStop, CoreV2Operation,
+            CoreV2Status, CoreV2Submit, IpcOperation, LogsInspect, LogsRetrieve, NetworkSetDns,
+            OpResponse, Status,
         },
         ws::events::{EVENT_URI, Event},
     },
@@ -104,6 +105,42 @@ impl<'a> Client<'a> {
             .data
             .ok_or(ClientError::EmptyData {
                 operation: CoreApply::PATH,
+            })
+    }
+
+    pub async fn submit_core(
+        &self,
+        payload: &api::core::v2::CoreSubmitReq<'_>,
+    ) -> Result<'_, api::core::v2::OperationInfo> {
+        self.call::<CoreV2Submit>(Some(payload))
+            .await?
+            .ok()?
+            .data
+            .ok_or(ClientError::EmptyData {
+                operation: CoreV2Submit::PATH,
+            })
+    }
+
+    pub async fn core_operation(
+        &self,
+        payload: &api::core::v2::CoreOperationReq<'_>,
+    ) -> Result<'_, api::core::v2::OperationInfo> {
+        self.call::<CoreV2Operation>(Some(payload))
+            .await?
+            .ok()?
+            .data
+            .ok_or(ClientError::EmptyData {
+                operation: CoreV2Operation::PATH,
+            })
+    }
+
+    pub async fn core_status_v2(&self) -> Result<'_, api::status::CoreInfos> {
+        self.call::<CoreV2Status>(None)
+            .await?
+            .ok()?
+            .data
+            .ok_or(ClientError::EmptyData {
+                operation: CoreV2Status::PATH,
             })
     }
 

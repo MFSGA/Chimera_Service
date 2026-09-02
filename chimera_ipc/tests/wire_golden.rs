@@ -1,12 +1,12 @@
-use std::borrow::Cow;
+use std::{borrow::Cow, sync::Arc};
 
 use chimera_ipc::api::{
     R, ResponseCode,
     core::apply::{ApplyOutcomeKind, CoreApplyData, CoreApplyReq},
     status::{
-        ConfigRevisionInfo, CoreInfos, CoreState, CoreStateDetail, RevisionIdInfo,
+        ConfigRevisionInfo, CoreInfos, CoreState, CoreStateDetail, RevisionIdInfo, StatusResBody,
     },
-    ws::events::Event,
+    ws::events::{ClashCoreKind, Event, LogField, LogFrame, LogLevel, LogStream, LogTimestamp},
 };
 use chimera_utils::core::{ClashCoreType, CoreType};
 use serde_json::json;
@@ -19,6 +19,7 @@ fn legacy_success_envelope_omits_error_kind() {
         data: Some(()),
         ts: 42,
         error_kind: None,
+        retryable: None,
     };
     assert_eq!(
         serde_json::to_value(envelope).unwrap(),
@@ -34,6 +35,7 @@ fn classified_error_envelope_appends_error_kind() {
         data: None,
         ts: 42,
         error_kind: Some(Cow::Borrowed("config_not_found")),
+        retryable: None,
     };
     assert_eq!(
         serde_json::to_value(envelope).unwrap(),
@@ -120,6 +122,73 @@ fn full_status_snapshot_event_has_the_target_variant_name() {
             }
         })
     );
+}
+
+#[test]
+fn core_log_event_serializes_the_shared_frame_without_arc_artifacts() {
+    let event = Event::new_core_log(Arc::new(LogFrame {
+        at: 1_700_000_000_000,
+        epoch: 7,
+        kind: ClashCoreKind::Mihomo,
+        stream: LogStream::Stderr,
+        level: LogLevel::Error,
+        timestamp: Some(LogTimestamp {
+            raw: "2026-08-16T10:00:00Z".into(),
+            unix_ms: Some(1_700_000_000_001),
+            inferred: false,
+        }),
+        target: Some("config".into()),
+        message: "bad config".into(),
+        fields: vec![LogField {
+            key: "line".into(),
+            value: "3".into(),
+        }],
+        raw: "bad config line=3".into(),
+        truncated: false,
+    }));
+    assert_eq!(
+        serde_json::to_value(event).unwrap(),
+        json!({
+            "CoreLog": {
+                "at":1_700_000_000_000_i64,
+                "epoch":7,
+                "kind":"mihomo",
+                "stream":"stderr",
+                "level":"error",
+                "timestamp":{
+                    "raw":"2026-08-16T10:00:00Z",
+                    "unix_ms":1_700_000_000_001_i64,
+                    "inferred":false
+                },
+                "target":"config",
+                "message":"bad config",
+                "fields":[{"key":"line","value":"3"}],
+                "raw":"bad config line=3",
+                "truncated":false
+            }
+        })
+    );
+}
+
+#[test]
+fn pre_log_paths_status_payload_still_decodes() {
+    let body: StatusResBody<'static> = serde_json::from_value(json!({
+        "version":"1.8.1",
+        "core_infos":{
+            "type":null,
+            "state":{"Stopped":null},
+            "state_changed_at":42,
+            "config_path":null
+        },
+        "runtime_infos":{
+            "service_data_dir":"service-data",
+            "service_config_dir":"service-config",
+            "nyanpasu_config_dir":"nyanpasu-config",
+            "nyanpasu_data_dir":"nyanpasu-data"
+        }
+    }))
+    .unwrap();
+    assert!(body.logs.is_none());
 }
 
 #[test]

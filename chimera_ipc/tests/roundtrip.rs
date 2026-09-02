@@ -1,4 +1,4 @@
-use std::{borrow::Cow, net::IpAddr, path::PathBuf};
+use std::{borrow::Cow, net::IpAddr, path::PathBuf, sync::Arc};
 
 use chimera_ipc::api::{
     R, ResponseCode,
@@ -12,10 +12,9 @@ use chimera_ipc::api::{
         ConfigRevisionInfo, CoreControllerInfo, CoreHealthInfo, CoreHealthState, CoreInfos,
         CoreState, CoreStateDetail, RevisionIdInfo,
     },
-    ws::events::{Event, TraceLog},
+    ws::events::{ClashCoreKind, Event, LogField, LogFrame, LogLevel, LogStream, LogTimestamp},
 };
 use chimera_utils::core::{ClashCoreType, CoreType};
-use indexmap::IndexMap;
 use serde::{Serialize, de::DeserializeOwned};
 
 fn assert_json_roundtrip<T>(value: &T)
@@ -42,6 +41,7 @@ fn response_envelopes_roundtrip_with_and_without_classification() {
         data: Some("payload".to_string()),
         ts: 42,
         error_kind: None,
+        retryable: None,
     });
     assert_json_roundtrip(&R::<()> {
         code: ResponseCode::OtherError,
@@ -49,6 +49,7 @@ fn response_envelopes_roundtrip_with_and_without_classification() {
         data: None,
         ts: 43,
         error_kind: Some(Cow::Borrowed("binary_not_found")),
+        retryable: Some(false),
     });
 }
 
@@ -148,15 +149,26 @@ fn every_lifecycle_detail_roundtrips() {
 
 #[test]
 fn every_event_variant_roundtrips() {
-    let mut fields = IndexMap::new();
-    fields.insert("request_id".into(), serde_json::json!("abc"));
-    assert_json_roundtrip(&Event::new_log(TraceLog {
-        timestamp: "2026-08-01T00:00:00Z".into(),
-        level: "INFO".into(),
+    assert_json_roundtrip(&Event::new_core_log(Arc::new(LogFrame {
+        at: 1_753_719_382_646,
+        epoch: 3,
+        kind: ClashCoreKind::Mihomo,
+        stream: LogStream::Stdout,
+        level: LogLevel::Info,
+        timestamp: Some(LogTimestamp {
+            raw: "2026-08-01T00:00:00Z".into(),
+            unix_ms: Some(1_753_987_200_000),
+            inferred: false,
+        }),
+        target: Some("mihomo".into()),
         message: "started".into(),
-        target: "chimera_service".into(),
-        fields,
-    }));
+        fields: vec![LogField {
+            key: "request_id".into(),
+            value: "abc".into(),
+        }],
+        raw: "started".into(),
+        truncated: false,
+    })));
     assert_json_roundtrip(&Event::new_core_state_changed(CoreState::Running));
     assert_json_roundtrip(&Event::new_core_status_changed(CoreInfos {
         r#type: None,
