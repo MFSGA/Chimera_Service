@@ -202,7 +202,11 @@ async fn patch_verification_mismatch_falls_back_to_a_restart() {
     .await
     .unwrap();
     manager.start(spec(&root, initial)).await.unwrap();
-    let before = manager.status().revision.unwrap();
+    let before_status = manager.status();
+    let before = before_status.revision.unwrap();
+    let CoreState::Running { pid: before_pid, .. } = before_status.state else {
+        panic!("expected running state")
+    };
     let outcome = manager
         .apply_config(spec(&root, desired), Some(before.id()))
         .await
@@ -210,6 +214,11 @@ async fn patch_verification_mismatch_falls_back_to_a_restart() {
     let ApplyOutcome::Restarted { revision } = outcome else {
         panic!("expected hard fallback after verification mismatch: {outcome:?}")
     };
-    assert!(revision.epoch > before.epoch);
+    assert_eq!(revision.epoch, before.epoch);
+    assert_eq!(revision.generation, before.generation + 1);
+    let CoreState::Running { pid: after_pid, .. } = manager.status().state else {
+        panic!("expected running state")
+    };
+    assert_ne!(before_pid, after_pid, "fallback restart must replace the process");
     manager.shutdown().await.unwrap();
 }
