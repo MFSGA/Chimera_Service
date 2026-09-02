@@ -187,22 +187,26 @@ mod tests {
 
     #[test]
     fn zero_interval_or_timeout_is_rejected() {
-        assert!(HealthPolicy::new(
-            Duration::ZERO,
-            Duration::from_secs(1),
-            NonZeroU32::MIN,
-            NonZeroU32::MIN,
-            Duration::ZERO,
-        )
-        .is_err());
-        assert!(HealthPolicy::new(
-            Duration::from_secs(1),
-            Duration::ZERO,
-            NonZeroU32::MIN,
-            NonZeroU32::MIN,
-            Duration::ZERO,
-        )
-        .is_err());
+        assert!(
+            HealthPolicy::new(
+                Duration::ZERO,
+                Duration::from_secs(1),
+                NonZeroU32::MIN,
+                NonZeroU32::MIN,
+                Duration::ZERO,
+            )
+            .is_err()
+        );
+        assert!(
+            HealthPolicy::new(
+                Duration::from_secs(1),
+                Duration::ZERO,
+                NonZeroU32::MIN,
+                NonZeroU32::MIN,
+                Duration::ZERO,
+            )
+            .is_err()
+        );
     }
 
     fn policy(failures: u32, successes: u32, start_period: Duration) -> HealthPolicy {
@@ -256,9 +260,7 @@ mod tests {
         let started = std::time::Instant::now();
         let mut tracker = HealthTracker::new(policy(1, 1, Duration::from_secs(30)), started);
         assert_eq!(
-            tracker
-                .observe(started, &probe::ProbeResult::Healthy)
-                .state,
+            tracker.observe(started, &probe::ProbeResult::Healthy).state,
             TrackerState::Healthy
         );
         let failure = tracker.observe(

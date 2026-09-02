@@ -23,7 +23,9 @@ pub enum DegradeReason {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SwitchOutcome {
     Graceful,
-    Hard { reason: DegradeReason },
+    Hard {
+        reason: DegradeReason,
+    },
     DurabilityUncertain {
         outcome: Box<SwitchOutcome>,
         warning: String,
@@ -32,11 +34,21 @@ pub enum SwitchOutcome {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApplyOutcome {
-    Noop { revision: ConfigRevision },
-    Patched { revision: ConfigRevision },
-    Reloaded { revision: ConfigRevision },
-    Restarted { revision: ConfigRevision },
-    Switched { revision: ConfigRevision },
+    Noop {
+        revision: ConfigRevision,
+    },
+    Patched {
+        revision: ConfigRevision,
+    },
+    Reloaded {
+        revision: ConfigRevision,
+    },
+    Restarted {
+        revision: ConfigRevision,
+    },
+    Switched {
+        revision: ConfigRevision,
+    },
     RolledBack {
         revision: ConfigRevision,
         failed_apply: String,
@@ -194,7 +206,10 @@ mod tests {
             manager.status().state,
             crate::CoreState::Stopped { reason: None }
         ));
-        assert_eq!(manager.options().runtime_dir.as_deref(), Some("runtime".into()));
+        assert_eq!(
+            manager.options().runtime_dir.as_deref(),
+            Some("runtime".into())
+        );
     }
 
     #[tokio::test]

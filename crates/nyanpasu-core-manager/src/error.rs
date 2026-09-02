@@ -20,9 +20,7 @@ pub enum Error {
     },
     #[error("no external controller configured; the version health probe needs one")]
     ControllerMissing,
-    #[error(
-        "core `{kind}` version `{version}` does not support the required local IPC transport"
-    )]
+    #[error("core `{kind}` version `{version}` does not support the required local IPC transport")]
     RequiredLocalIpcUnsupported { kind: CoreKind, version: String },
     #[error("config check failed: {0}")]
     ConfigCheckFailed(String),
