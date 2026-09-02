@@ -1,5 +1,7 @@
 //! Health-check policy and transition tracking.
 
+pub mod probe;
+
 use std::{num::NonZeroU32, time::Duration};
 
 use crate::Error;

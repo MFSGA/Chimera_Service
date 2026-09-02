@@ -9,7 +9,10 @@ pub mod state;
 
 pub use capability::{Feature, RuntimeFeature};
 pub use error::Error;
-pub use health::HealthPolicy;
+pub use health::{
+    HealthPolicy,
+    probe::{HealthProbe, ProbeContext, ProbeFuture, ProbeHandle, ProbePhase, ProbeResult},
+};
 pub use clash_api::Host;
 pub use spec::{
     CoreSpec, InstanceOptions, InstanceSpec, LocalIpcPolicy, ManagerOptions, ResolvedController,
