@@ -1,10 +1,12 @@
 //! Clash core lifecycle management primitives.
 
 mod capability;
+mod error;
 pub mod kind;
 pub mod state;
 
 pub use capability::{Feature, RuntimeFeature};
+pub use error::Error;
 pub use state::{
     ConfigRevision, CoreState, CoreStatus, HealthState, HealthStatus, InstanceState,
     InstanceStatus, RevisionId, SpecSummary, StopReason,
