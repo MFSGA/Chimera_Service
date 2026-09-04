@@ -22,7 +22,7 @@ windows.workspace = true
 libc = "0.2"
 
 [target.'cfg(all(not(windows), not(target_os = "linux")))'.dependencies]
-sysinfo = "0.37"
+sysinfo = "0.39"
 
 [features]
 default = []

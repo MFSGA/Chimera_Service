@@ -1805,7 +1805,7 @@ dependencies = [
  "encoding_rs",
  "kill_tree",
  "libc",
- "sysinfo 0.37.2",
+ "sysinfo 0.39.6",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
@@ -2611,20 +2611,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
-]
-
-[[package]]
-name = "sysinfo"
-version = "0.37.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "16607d5caffd1c07ce073528f9ed972d88db15dd44023fa57142963be3feb11f"
-dependencies = [
- "libc",
- "memchr",
- "ntapi",
- "objc2-core-foundation",
- "objc2-io-kit",
- "windows 0.61.3",
 ]
 
 [[package]]
