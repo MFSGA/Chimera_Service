@@ -1,18 +1,32 @@
 //! Additive v2 core-control wire for Chimera Service.
 //!
-//! The legacy /core/start|stop|restart routes remain available. This protocol
-//! adds durable operation admission/query semantics without pretending the
-//! current daemon already has ref's revision/digest model.
+//! The legacy /core/start|stop|restart routes remain available. V2 uses
+//! durable operation admission/query semantics and portable reconcile input:
+//! callers ship config text plus an optional digest/CAS token; the daemon
+//! materializes its own private runtime file.
 
-use std::{borrow::Cow, path::PathBuf};
+use std::borrow::Cow;
 
 use serde::{Deserialize, Serialize};
 
-use crate::api::R;
+use crate::api::{
+    R,
+    status::{ConfigRevisionInfo, RevisionIdInfo},
+};
 
 pub const CORE_V2_SUBMIT_ENDPOINT: &str = "/v2/core/submit";
 pub const CORE_V2_OPERATION_ENDPOINT: &str = "/v2/core/operation";
 pub const CORE_V2_STATUS_ENDPOINT: &str = "/v2/core/status";
+
+/// Stable FNV-1a digest used as the portable change identity.
+pub fn payload_digest(bytes: &[u8]) -> String {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{hash:016x}")
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "specta", derive(specta::Type))]
@@ -25,11 +39,17 @@ pub struct CoreSubmitReq<'a> {
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CoreCommandInfo<'a> {
-    /// Compatibility reconcile while the daemon still consumes a promoted
-    /// config path instead of config bytes.
     Reconcile {
         core_type: Cow<'a, chimera_utils::core::CoreType>,
-        config_file: Cow<'a, PathBuf>,
+        /// Full config document; never a caller filesystem path.
+        config: Cow<'a, str>,
+        /// Digest of `config` as computed by the caller.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expected_digest: Option<Cow<'a, str>>,
+        /// Compare-and-swap token for the revision the caller believes is
+        /// currently applied. None means unconditional reconcile.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expected_applied: Option<RevisionIdInfo>,
     },
     Stop,
 }
@@ -39,10 +59,14 @@ impl CoreCommandInfo<'_> {
         match self {
             Self::Reconcile {
                 core_type,
-                config_file,
+                config,
+                expected_digest,
+                expected_applied,
             } => CoreCommandInfo::Reconcile {
                 core_type: Cow::Owned(core_type.into_owned()),
-                config_file: Cow::Owned(config_file.into_owned()),
+                config: Cow::Owned(config.into_owned()),
+                expected_digest: expected_digest.map(|digest| Cow::Owned(digest.into_owned())),
+                expected_applied,
             },
             Self::Stop => CoreCommandInfo::Stop,
         }
@@ -67,11 +91,31 @@ pub enum OperationPhase {
     Failed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "snake_case")]
+pub enum ReconcileOutcomeKind {
+    Started,
+    Noop,
+    Patched,
+    Reloaded,
+    Restarted,
+    Switched,
+    RolledBack,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+pub struct ReconcileOutcomeInfo {
+    pub outcome: ReconcileOutcomeKind,
+    pub revision: ConfigRevisionInfo,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum OperationOutputInfo {
-    Reconciled,
+    Reconciled(ReconcileOutcomeInfo),
     Stopped,
 }
 
@@ -150,24 +194,50 @@ mod tests {
     use super::*;
 
     #[test]
-    fn submit_and_operation_shapes_roundtrip() {
+    fn reconcile_shape_roundtrips_with_digest_and_cas() {
         let request = CoreSubmitReq {
             operation_id: Cow::Borrowed("00112233445566778899aabbccddeeff"),
-            command: CoreCommandInfo::Stop,
+            command: CoreCommandInfo::Reconcile {
+                core_type: Cow::Owned(chimera_utils::core::CoreType::Clash(
+                    chimera_utils::core::ClashCoreType::Mihomo,
+                )),
+                config: Cow::Borrowed("external-controller: 127.0.0.1:9090\n"),
+                expected_digest: Some(Cow::Borrowed("cbf29ce484222325")),
+                expected_applied: Some(RevisionIdInfo {
+                    epoch: 3,
+                    generation: 7,
+                    effective_hash: "fedcba9876543210".into(),
+                }),
+            },
         };
         let encoded = serde_json::to_string(&request).unwrap();
-        assert!(encoded.contains("\"type\":\"stop\""));
+        assert!(encoded.contains("\"type\":\"reconcile\""));
+        assert!(encoded.contains("\"expected_applied\""));
+        let decoded: CoreSubmitReq<'_> = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded.operation_id, request.operation_id);
+        assert!(matches!(decoded.command, CoreCommandInfo::Reconcile { .. }));
+    }
 
-        let query = CoreOperationReq {
-            operation_id: Cow::Borrowed("00112233445566778899aabbccddeeff"),
-            wait_ms: Some(250),
-        };
-        let encoded = serde_json::to_string(&query).unwrap();
-        assert!(encoded.contains("\"wait_ms\":250"));
+    #[test]
+    fn digest_is_stable_and_content_sensitive() {
+        assert_eq!(payload_digest(b""), "cbf29ce484222325");
+        assert_eq!(payload_digest(b"abc"), payload_digest(b"abc"));
+        assert_ne!(payload_digest(b"abc"), payload_digest(b"abd"));
+    }
 
+    #[test]
+    fn terminal_output_roundtrips() {
         let terminal = OperationInfo::succeeded(
             "00112233445566778899aabbccddeeff",
-            OperationOutputInfo::Stopped,
+            OperationOutputInfo::Reconciled(ReconcileOutcomeInfo {
+                outcome: ReconcileOutcomeKind::Started,
+                revision: ConfigRevisionInfo {
+                    epoch: 1,
+                    generation: 1,
+                    source_hash: "0123456789abcdef".into(),
+                    effective_hash: "0123456789abcdef".into(),
+                },
+            }),
         );
         let encoded = serde_json::to_string(&terminal).unwrap();
         assert_eq!(

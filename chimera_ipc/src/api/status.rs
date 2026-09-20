@@ -17,6 +17,33 @@ impl Default for CoreState {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+pub struct ConfigRevisionInfo {
+    pub epoch: u64,
+    pub generation: u64,
+    pub source_hash: String,
+    pub effective_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+pub struct RevisionIdInfo {
+    pub epoch: u64,
+    pub generation: u64,
+    pub effective_hash: String,
+}
+
+impl ConfigRevisionInfo {
+    pub fn id(&self) -> RevisionIdInfo {
+        RevisionIdInfo {
+            epoch: self.epoch,
+            generation: self.generation,
+            effective_hash: self.effective_hash.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct CoreInfos {
@@ -24,6 +51,8 @@ pub struct CoreInfos {
     pub state: CoreState,
     pub state_changed_at: i64,
     pub config_path: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<ConfigRevisionInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

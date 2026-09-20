@@ -4,7 +4,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc,
-        atomic::{AtomicI64, Ordering},
+        atomic::{AtomicI64, AtomicU64, Ordering},
     },
 };
 
@@ -13,8 +13,9 @@ use chimera_ipc::{
     api::{
         core::v2::{
             CoreCommandInfo, CoreOperationReq, CoreSubmitReq, OperationInfo, OperationOutputInfo,
+            ReconcileOutcomeInfo, ReconcileOutcomeKind, payload_digest,
         },
-        status::CoreState,
+        status::{ConfigRevisionInfo, CoreState},
     },
     utils::get_current_ts,
 };
@@ -64,6 +65,8 @@ pub struct CoreManagerService {
     cancel_token: CancellationToken,
     operations: Arc<parking_lot::Mutex<OperationRegistryState>>,
     operation_lock: Arc<Mutex<()>>,
+    applied_revision: Arc<parking_lot::Mutex<Option<ConfigRevisionInfo>>>,
+    next_epoch: Arc<AtomicU64>,
 }
 
 impl CoreManagerService {
@@ -75,6 +78,8 @@ impl CoreManagerService {
             cancel_token,
             operations: Arc::new(parking_lot::Mutex::new(OperationRegistryState::default())),
             operation_lock: Arc::new(Mutex::new(())),
+            applied_revision: Arc::new(parking_lot::Mutex::new(None)),
+            next_epoch: Arc::new(AtomicU64::new(1)),
         }
     }
 
@@ -136,19 +141,65 @@ impl CoreManagerService {
         match command {
             CoreCommandInfo::Reconcile {
                 core_type,
-                config_file,
+                config,
+                expected_digest,
+                expected_applied,
             } => {
-                if matches!(self.status().await.state, CoreState::Running) {
+                let computed_digest = payload_digest(config.as_bytes());
+                if let Some(expected_digest) = expected_digest {
+                    anyhow::ensure!(
+                        expected_digest.as_ref() == computed_digest,
+                        "config digest mismatch: declared {}, computed {}",
+                        expected_digest,
+                        computed_digest
+                    );
+                }
+
+                let status = self.status().await;
+                let was_running = matches!(status.state, CoreState::Running);
+                let current_applied = status.revision.as_ref().map(ConfigRevisionInfo::id);
+                if let Some(expected) = expected_applied {
+                    anyhow::ensure!(
+                        current_applied.as_ref() == Some(&expected),
+                        "revision conflict: expected {:?}, applied {:?}",
+                        expected,
+                        current_applied
+                    );
+                }
+
+                let config_dir = crate::utils::dirs::service_config_dir();
+                tokio::fs::create_dir_all(&config_dir).await?;
+                let config_path = config_dir.join(format!("runtime-{computed_digest}.yaml"));
+                tokio::fs::write(&config_path, config.as_bytes()).await?;
+                let config_path = Utf8PathBuf::from_path_buf(config_path)
+                    .map_err(|_| anyhow::anyhow!("service config path is not valid UTF-8"))?;
+
+                if was_running {
                     self.stop().await?;
                 }
-                let config_path = Utf8Path::from_path(&config_file)
-                    .ok_or_else(|| anyhow::anyhow!("config_file is not valid UTF-8"))?;
-                self.start(&core_type, config_path).await?;
-                Ok(OperationOutputInfo::Reconciled)
+                self.start(&core_type, config_path.as_path()).await?;
+
+                let revision = ConfigRevisionInfo {
+                    epoch: self.next_epoch.fetch_add(1, Ordering::Relaxed),
+                    generation: 1,
+                    source_hash: computed_digest.clone(),
+                    effective_hash: computed_digest,
+                };
+                *self.applied_revision.lock() = Some(revision.clone());
+                Ok(OperationOutputInfo::Reconciled(ReconcileOutcomeInfo {
+                    outcome: if was_running {
+                        ReconcileOutcomeKind::Restarted
+                    } else {
+                        ReconcileOutcomeKind::Started
+                    },
+                    revision,
+                }))
             }
             CoreCommandInfo::Stop => {
                 if matches!(self.status().await.state, CoreState::Running) {
                     self.stop().await?;
+                } else {
+                    *self.applied_revision.lock() = None;
                 }
                 Ok(OperationOutputInfo::Stopped)
             }
@@ -231,6 +282,9 @@ impl CoreManagerService {
         match *manager {
             Some(ref manager) => chimera_ipc::api::status::CoreInfos {
                 r#type: Some(manager.instance.core_type.clone()),
+                revision: matches!(state, CoreState::Running)
+                    .then(|| self.applied_revision.lock().clone())
+                    .flatten(),
                 state,
                 state_changed_at,
                 config_path: Some(manager.config_path.clone().into()),
@@ -240,6 +294,7 @@ impl CoreManagerService {
                 state,
                 state_changed_at,
                 config_path: None,
+                revision: None,
             },
         }
     }
@@ -349,6 +404,7 @@ impl CoreManagerService {
         if matches!(state.as_ref(), CoreState::Running) {
             anyhow::bail!("core is already running");
         }
+        *self.applied_revision.lock() = None;
 
         // check config_path
         let config_path = config_path.canonicalize_utf8()?;
@@ -477,6 +533,7 @@ impl CoreManagerService {
         }
 
         Self::notify_state_changed(self.state_changed_notify.clone(), CoreState::Stopped(None));
+        *self.applied_revision.lock() = None;
         Ok(())
     }
 }
@@ -485,8 +542,12 @@ impl CoreManagerService {
 mod tests {
     use std::borrow::Cow;
 
-    use chimera_ipc::api::core::v2::{
-        CoreCommandInfo, CoreOperationReq, CoreSubmitReq, OperationOutputInfo, OperationPhase,
+    use chimera_ipc::api::{
+        core::v2::{
+            CoreCommandInfo, CoreOperationReq, CoreSubmitReq, OperationOutputInfo, OperationPhase,
+            payload_digest,
+        },
+        status::{CoreState, RevisionIdInfo},
     };
     use tokio_util::sync::CancellationToken;
 
@@ -527,6 +588,82 @@ mod tests {
         assert_eq!(terminal.phase, OperationPhase::Succeeded);
         assert_eq!(terminal.output, Some(OperationOutputInfo::Stopped));
         assert_eq!(service.operation_snapshot(OPERATION_ID), Some(terminal));
+    }
+
+    #[tokio::test]
+    async fn v2_reconcile_digest_mismatch_fails_before_mutation() {
+        let service = service();
+        let request = CoreSubmitReq {
+            operation_id: Cow::Borrowed(OPERATION_ID),
+            command: CoreCommandInfo::Reconcile {
+                core_type: Cow::Owned(chimera_utils::core::CoreType::Clash(
+                    chimera_utils::core::ClashCoreType::Mihomo,
+                )),
+                config: Cow::Borrowed("mode: rule\n"),
+                expected_digest: Some(Cow::Borrowed("0000000000000000")),
+                expected_applied: None,
+            },
+        };
+
+        service.submit_v2(&request).await.unwrap();
+        let terminal = service
+            .operation_v2(&CoreOperationReq {
+                operation_id: Cow::Borrowed(OPERATION_ID),
+                wait_ms: Some(1_000),
+            })
+            .await
+            .unwrap();
+        assert_eq!(terminal.phase, OperationPhase::Failed);
+        assert!(
+            terminal
+                .error
+                .as_ref()
+                .is_some_and(|error| error.message.contains("config digest mismatch"))
+        );
+        let status = service.status().await;
+        assert!(matches!(status.state, CoreState::Stopped(_)));
+        assert!(status.revision.is_none());
+    }
+
+    #[tokio::test]
+    async fn v2_reconcile_stale_cas_fails_before_mutation() {
+        let service = service();
+        let config = "mode: rule\n";
+        let digest = payload_digest(config.as_bytes());
+        let request = CoreSubmitReq {
+            operation_id: Cow::Borrowed(OPERATION_ID),
+            command: CoreCommandInfo::Reconcile {
+                core_type: Cow::Owned(chimera_utils::core::CoreType::Clash(
+                    chimera_utils::core::ClashCoreType::Mihomo,
+                )),
+                config: Cow::Borrowed(config),
+                expected_digest: Some(Cow::Owned(digest)),
+                expected_applied: Some(RevisionIdInfo {
+                    epoch: 9,
+                    generation: 1,
+                    effective_hash: "deadbeefdeadbeef".to_string(),
+                }),
+            },
+        };
+
+        service.submit_v2(&request).await.unwrap();
+        let terminal = service
+            .operation_v2(&CoreOperationReq {
+                operation_id: Cow::Borrowed(OPERATION_ID),
+                wait_ms: Some(1_000),
+            })
+            .await
+            .unwrap();
+        assert_eq!(terminal.phase, OperationPhase::Failed);
+        assert!(
+            terminal
+                .error
+                .as_ref()
+                .is_some_and(|error| error.message.contains("revision conflict"))
+        );
+        let status = service.status().await;
+        assert!(matches!(status.state, CoreState::Stopped(_)));
+        assert!(status.revision.is_none());
     }
 
     #[tokio::test]
