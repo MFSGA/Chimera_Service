@@ -3,7 +3,10 @@ use std::borrow::Cow;
 use axum::{Json, extract::State, http::StatusCode};
 use chimera_ipc::api::{
     RBuilder,
-    core::v2::{CoreOperationReq, CoreOperationRes, CoreStatusRes, CoreSubmitReq, CoreSubmitRes},
+    core::v2::{
+        CoreApiConnectionRes, CoreOperationReq, CoreOperationRes, CoreStatusRes, CoreSubmitReq,
+        CoreSubmitRes,
+    },
 };
 
 use crate::server::routing::AppState;
@@ -38,5 +41,14 @@ pub async fn status(State(state): State<AppState>) -> (StatusCode, Json<CoreStat
     (
         StatusCode::OK,
         Json(RBuilder::success(state.core_manager.status().await)),
+    )
+}
+
+pub async fn api_connection(
+    State(state): State<AppState>,
+) -> (StatusCode, Json<CoreApiConnectionRes<'static>>) {
+    (
+        StatusCode::OK,
+        Json(RBuilder::success(state.core_manager.api_connection_v2())),
     )
 }

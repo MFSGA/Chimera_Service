@@ -17,6 +17,7 @@ use crate::api::{
 pub const CORE_V2_SUBMIT_ENDPOINT: &str = "/v2/core/submit";
 pub const CORE_V2_OPERATION_ENDPOINT: &str = "/v2/core/operation";
 pub const CORE_V2_STATUS_ENDPOINT: &str = "/v2/core/status";
+pub const CORE_V2_API_ENDPOINT: &str = "/v2/core/api";
 
 /// Stable FNV-1a digest used as the portable change identity.
 pub fn payload_digest(bytes: &[u8]) -> String {
@@ -26,6 +27,24 @@ pub fn payload_digest(bytes: &[u8]) -> String {
         hash = hash.wrapping_mul(0x100000001b3);
     }
     format!("{hash:016x}")
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
+pub enum CoreControllerInfo {
+    Http(String),
+    UnixSocket(String),
+    NamedPipe(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+pub struct CoreApiConnection {
+    pub instance_id: String,
+    pub controller: CoreControllerInfo,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -188,6 +207,7 @@ impl OperationInfo {
 pub type CoreSubmitRes<'a> = R<'a, OperationInfo>;
 pub type CoreOperationRes<'a> = R<'a, OperationInfo>;
 pub type CoreStatusRes<'a> = R<'a, crate::api::status::CoreInfos>;
+pub type CoreApiConnectionRes<'a> = R<'a, Option<CoreApiConnection>>;
 
 #[cfg(test)]
 mod tests {
@@ -223,6 +243,20 @@ mod tests {
         assert_eq!(payload_digest(b""), "cbf29ce484222325");
         assert_eq!(payload_digest(b"abc"), payload_digest(b"abc"));
         assert_ne!(payload_digest(b"abc"), payload_digest(b"abd"));
+    }
+
+    #[test]
+    fn api_connection_roundtrips() {
+        let connection = CoreApiConnection {
+            instance_id: "00000000000000010000000000000002".to_string(),
+            controller: CoreControllerInfo::Http("http://127.0.0.1:9090".to_string()),
+            secret: Some("secret-token".to_string()),
+        };
+        let encoded = serde_json::to_string(&connection).unwrap();
+        assert_eq!(
+            serde_json::from_str::<CoreApiConnection>(&encoded).unwrap(),
+            connection
+        );
     }
 
     #[test]

@@ -79,6 +79,17 @@ impl<'a> Client<'a> {
         Ok(response.data.unwrap())
     }
 
+    pub async fn core_api_v2(&self) -> Result<'_, Option<api::core::v2::CoreApiConnection>> {
+        let request =
+            Request::get(api::core::v2::CORE_V2_API_ENDPOINT).body(Empty::<Bytes>::new())?;
+        let response = send_request(&self.0, request)
+            .await?
+            .cast_body::<api::core::v2::CoreApiConnectionRes<'_>>()
+            .await?
+            .ok()?;
+        Ok(response.data.unwrap())
+    }
+
     pub async fn start_core(&self, payload: &api::core::start::CoreStartReq<'_>) -> Result<'_, ()> {
         let payload = simd_json::serde::to_string(payload)?;
         let request = Request::post(api::core::start::CORE_START_ENDPOINT)

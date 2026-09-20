@@ -12,8 +12,9 @@ use camino::{Utf8Path, Utf8PathBuf};
 use chimera_ipc::{
     api::{
         core::v2::{
-            CoreCommandInfo, CoreOperationReq, CoreSubmitReq, OperationInfo, OperationOutputInfo,
-            ReconcileOutcomeInfo, ReconcileOutcomeKind, payload_digest,
+            CoreApiConnection, CoreCommandInfo, CoreControllerInfo, CoreOperationReq,
+            CoreSubmitReq, OperationInfo, OperationOutputInfo, ReconcileOutcomeInfo,
+            ReconcileOutcomeKind, payload_digest,
         },
         status::{ConfigRevisionInfo, CoreState},
     },
@@ -34,6 +35,62 @@ use super::consts;
 
 const OPERATION_HISTORY_LIMIT: usize = 64;
 const OPERATION_WAIT_LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
+
+fn yaml_scalar(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() || matches!(value, "null" | "~") {
+        return None;
+    }
+    if value.starts_with('"') && value.ends_with('"') {
+        return serde_json::from_str::<String>(value).ok();
+    }
+    if value.starts_with('\'') && value.ends_with('\'') && value.len() >= 2 {
+        return Some(value[1..value.len() - 1].replace("''", "'"));
+    }
+    let value = value.split(" #").next().unwrap_or(value).trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+fn top_level_yaml_scalar(config: &str, key: &str) -> Option<String> {
+    config.lines().find_map(|line| {
+        if line
+            .chars()
+            .next()
+            .is_some_and(|character| character.is_whitespace())
+        {
+            return None;
+        }
+        let (name, value) = line.split_once(':')?;
+        (name.trim() == key).then(|| yaml_scalar(value)).flatten()
+    })
+}
+
+fn api_connection_from_config(
+    config: &str,
+    revision: &ConfigRevisionInfo,
+) -> Option<CoreApiConnection> {
+    let controller = if let Some(controller) = top_level_yaml_scalar(config, "external-controller")
+    {
+        let url = if controller.contains("://") {
+            controller
+        } else {
+            format!("http://{controller}")
+        };
+        CoreControllerInfo::Http(url)
+    } else if let Some(path) = top_level_yaml_scalar(config, "external-controller-unix") {
+        CoreControllerInfo::UnixSocket(path)
+    } else if let Some(path) = top_level_yaml_scalar(config, "external-controller-pipe") {
+        CoreControllerInfo::NamedPipe(path)
+    } else {
+        return None;
+    };
+
+    Some(CoreApiConnection {
+        instance_id: format!("{:016x}{:016x}", revision.epoch, revision.generation),
+        controller,
+        secret: top_level_yaml_scalar(config, "secret"),
+    })
+}
 
 #[derive(Debug)]
 struct OperationRecord {
@@ -66,6 +123,7 @@ pub struct CoreManagerService {
     operations: Arc<parking_lot::Mutex<OperationRegistryState>>,
     operation_lock: Arc<Mutex<()>>,
     applied_revision: Arc<parking_lot::Mutex<Option<ConfigRevisionInfo>>>,
+    api_connection: Arc<parking_lot::Mutex<Option<CoreApiConnection>>>,
     next_epoch: Arc<AtomicU64>,
 }
 
@@ -79,6 +137,7 @@ impl CoreManagerService {
             operations: Arc::new(parking_lot::Mutex::new(OperationRegistryState::default())),
             operation_lock: Arc::new(Mutex::new(())),
             applied_revision: Arc::new(parking_lot::Mutex::new(None)),
+            api_connection: Arc::new(parking_lot::Mutex::new(None)),
             next_epoch: Arc::new(AtomicU64::new(1)),
         }
     }
@@ -186,6 +245,8 @@ impl CoreManagerService {
                     effective_hash: computed_digest,
                 };
                 *self.applied_revision.lock() = Some(revision.clone());
+                *self.api_connection.lock() =
+                    api_connection_from_config(config.as_ref(), &revision);
                 Ok(OperationOutputInfo::Reconciled(ReconcileOutcomeInfo {
                     outcome: if was_running {
                         ReconcileOutcomeKind::Restarted
@@ -200,6 +261,7 @@ impl CoreManagerService {
                     self.stop().await?;
                 } else {
                     *self.applied_revision.lock() = None;
+                    *self.api_connection.lock() = None;
                 }
                 Ok(OperationOutputInfo::Stopped)
             }
@@ -270,6 +332,10 @@ impl CoreManagerService {
         })
         .await;
         Ok(receiver.borrow().clone())
+    }
+
+    pub fn api_connection_v2(&self) -> Option<CoreApiConnection> {
+        self.api_connection.lock().clone()
     }
 
     /// Get the status of the core instance
@@ -405,6 +471,7 @@ impl CoreManagerService {
             anyhow::bail!("core is already running");
         }
         *self.applied_revision.lock() = None;
+        *self.api_connection.lock() = None;
 
         // check config_path
         let config_path = config_path.canonicalize_utf8()?;
@@ -534,6 +601,7 @@ impl CoreManagerService {
 
         Self::notify_state_changed(self.state_changed_notify.clone(), CoreState::Stopped(None));
         *self.applied_revision.lock() = None;
+        *self.api_connection.lock() = None;
         Ok(())
     }
 }
@@ -544,20 +612,44 @@ mod tests {
 
     use chimera_ipc::api::{
         core::v2::{
-            CoreCommandInfo, CoreOperationReq, CoreSubmitReq, OperationOutputInfo, OperationPhase,
-            payload_digest,
+            CoreApiConnection, CoreCommandInfo, CoreControllerInfo, CoreOperationReq,
+            CoreSubmitReq, OperationOutputInfo, OperationPhase, payload_digest,
         },
-        status::{CoreState, RevisionIdInfo},
+        status::{ConfigRevisionInfo, CoreState, RevisionIdInfo},
     };
     use tokio_util::sync::CancellationToken;
 
-    use super::CoreManagerService;
+    use super::{CoreManagerService, api_connection_from_config};
 
     const OPERATION_ID: &str = "00112233445566778899aabbccddeeff";
 
     fn service() -> CoreManagerService {
         let (notify, _receiver) = tokio::sync::mpsc::channel(4);
         CoreManagerService::new_with_notify(notify, CancellationToken::new())
+    }
+
+    #[test]
+    fn api_binding_is_derived_from_applied_config() {
+        let revision = ConfigRevisionInfo {
+            epoch: 4,
+            generation: 2,
+            source_hash: "source".to_string(),
+            effective_hash: "effective".to_string(),
+        };
+        let connection = api_connection_from_config(
+            "external-controller: 127.0.0.1:9090\nsecret: 'token-value'\nmode: rule\n",
+            &revision,
+        )
+        .expect("controller should produce a binding");
+        assert_eq!(
+            connection,
+            CoreApiConnection {
+                instance_id: "00000000000000040000000000000002".to_string(),
+                controller: CoreControllerInfo::Http("http://127.0.0.1:9090".to_string()),
+                secret: Some("token-value".to_string()),
+            }
+        );
+        assert!(api_connection_from_config("mode: rule\n", &revision).is_none());
     }
 
     fn stop_request() -> CoreSubmitReq<'static> {

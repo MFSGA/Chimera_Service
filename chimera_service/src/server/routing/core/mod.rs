@@ -6,7 +6,10 @@ use chimera_ipc::api::core::{
     restart::CORE_RESTART_ENDPOINT,
     start::CORE_START_ENDPOINT,
     stop::CORE_STOP_ENDPOINT,
-    v2::{CORE_V2_OPERATION_ENDPOINT, CORE_V2_STATUS_ENDPOINT, CORE_V2_SUBMIT_ENDPOINT},
+    v2::{
+        CORE_V2_API_ENDPOINT, CORE_V2_OPERATION_ENDPOINT, CORE_V2_STATUS_ENDPOINT,
+        CORE_V2_SUBMIT_ENDPOINT,
+    },
 };
 
 use super::AppState;
@@ -24,4 +27,5 @@ pub fn setup() -> Router<AppState> {
         .route(CORE_V2_SUBMIT_ENDPOINT, post(v2::submit))
         .route(CORE_V2_OPERATION_ENDPOINT, post(v2::operation))
         .route(CORE_V2_STATUS_ENDPOINT, get(v2::status))
+        .route(CORE_V2_API_ENDPOINT, get(v2::api_connection))
 }
