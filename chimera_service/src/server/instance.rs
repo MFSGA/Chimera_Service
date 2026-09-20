@@ -1,5 +1,6 @@
 use std::{
     borrow::Cow,
+    collections::{HashMap, VecDeque},
     path::PathBuf,
     sync::{
         Arc,
@@ -8,19 +9,42 @@ use std::{
 };
 
 use camino::{Utf8Path, Utf8PathBuf};
-use chimera_ipc::{api::status::CoreState, utils::get_current_ts};
+use chimera_ipc::{
+    api::{
+        core::v2::{
+            CoreCommandInfo, CoreOperationReq, CoreSubmitReq, OperationInfo, OperationOutputInfo,
+        },
+        status::CoreState,
+    },
+    utils::get_current_ts,
+};
 use chimera_utils::core::{
     CommandEvent, CoreType,
     instance::{CoreInstance, CoreInstanceBuilder},
 };
 use tokio::{
     spawn,
-    sync::{Mutex, mpsc::Sender as MpscSender},
+    sync::{Mutex, mpsc::Sender as MpscSender, watch},
 };
 use tokio_util::{sync::CancellationToken, task::task_tracker::TaskTracker};
 use tracing::instrument;
 
 use super::consts;
+
+const OPERATION_HISTORY_LIMIT: usize = 64;
+const OPERATION_WAIT_LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
+
+#[derive(Debug)]
+struct OperationRecord {
+    fingerprint: String,
+    receiver: watch::Receiver<OperationInfo>,
+}
+
+#[derive(Debug, Default)]
+struct OperationRegistryState {
+    records: HashMap<String, OperationRecord>,
+    order: VecDeque<String>,
+}
 
 struct CoreManager {
     instance: Arc<CoreInstance>,
@@ -38,6 +62,8 @@ pub struct CoreManagerService {
     state_changed_at: Arc<AtomicI64>,
     state_changed_notify: Arc<Option<MpscSender<CoreState>>>,
     cancel_token: CancellationToken,
+    operations: Arc<parking_lot::Mutex<OperationRegistryState>>,
+    operation_lock: Arc<Mutex<()>>,
 }
 
 impl CoreManagerService {
@@ -47,7 +73,152 @@ impl CoreManagerService {
             state_changed_at: Arc::new(AtomicI64::new(0)),
             state_changed_notify: Arc::new(Some(notify)),
             cancel_token,
+            operations: Arc::new(parking_lot::Mutex::new(OperationRegistryState::default())),
+            operation_lock: Arc::new(Mutex::new(())),
         }
+    }
+
+    fn validate_operation_id(id: &str) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            id.len() == 32
+                && id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+            "operation id must be exactly 32 lowercase hexadecimal characters"
+        );
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn operation_snapshot(&self, id: &str) -> Option<OperationInfo> {
+        self.operations
+            .lock()
+            .records
+            .get(id)
+            .map(|record| record.receiver.borrow().clone())
+    }
+
+    fn insert_operation(
+        &self,
+        id: String,
+        fingerprint: String,
+        receiver: watch::Receiver<OperationInfo>,
+    ) {
+        let mut operations = self.operations.lock();
+        operations.records.insert(
+            id.clone(),
+            OperationRecord {
+                fingerprint,
+                receiver,
+            },
+        );
+        operations.order.push_back(id);
+        while operations.records.len() > OPERATION_HISTORY_LIMIT {
+            let Some(position) = operations.order.iter().position(|candidate| {
+                operations
+                    .records
+                    .get(candidate)
+                    .is_some_and(|record| record.receiver.borrow().is_terminal())
+            }) else {
+                break;
+            };
+            if let Some(evicted) = operations.order.remove(position) {
+                operations.records.remove(&evicted);
+            }
+        }
+    }
+
+    async fn execute_v2(
+        &self,
+        command: CoreCommandInfo<'static>,
+    ) -> anyhow::Result<OperationOutputInfo> {
+        let _guard = self.operation_lock.lock().await;
+        match command {
+            CoreCommandInfo::Reconcile {
+                core_type,
+                config_file,
+            } => {
+                if matches!(self.status().await.state, CoreState::Running) {
+                    self.stop().await?;
+                }
+                let config_path = Utf8Path::from_path(&config_file)
+                    .ok_or_else(|| anyhow::anyhow!("config_file is not valid UTF-8"))?;
+                self.start(&core_type, config_path).await?;
+                Ok(OperationOutputInfo::Reconciled)
+            }
+            CoreCommandInfo::Stop => {
+                if matches!(self.status().await.state, CoreState::Running) {
+                    self.stop().await?;
+                }
+                Ok(OperationOutputInfo::Stopped)
+            }
+        }
+    }
+
+    pub async fn submit_v2(&self, request: &CoreSubmitReq<'_>) -> anyhow::Result<OperationInfo> {
+        let id = request.operation_id.as_ref();
+        Self::validate_operation_id(id)?;
+        let command = request.command.clone().into_owned();
+        let fingerprint = serde_json::to_string(&command)?;
+
+        if let Some(existing) = self.operations.lock().records.get(id) {
+            anyhow::ensure!(
+                existing.fingerprint == fingerprint,
+                "operation conflict: id already exists with a different command"
+            );
+            return Ok(existing.receiver.borrow().clone());
+        }
+
+        let id = id.to_owned();
+        let queued = OperationInfo::queued(id.clone());
+        let (sender, receiver) = watch::channel(queued.clone());
+        self.insert_operation(id.clone(), fingerprint, receiver);
+
+        let service = self.clone();
+        tokio::spawn(async move {
+            sender.send_replace(OperationInfo::running(id.clone()));
+            let terminal = match service.execute_v2(command).await {
+                Ok(output) => OperationInfo::succeeded(id.clone(), output),
+                Err(error) => OperationInfo::failed(id.clone(), error.to_string()),
+            };
+            sender.send_replace(terminal);
+        });
+
+        Ok(queued)
+    }
+
+    pub async fn operation_v2(
+        &self,
+        request: &CoreOperationReq<'_>,
+    ) -> anyhow::Result<OperationInfo> {
+        let id = request.operation_id.as_ref();
+        Self::validate_operation_id(id)?;
+        let mut receiver = self
+            .operations
+            .lock()
+            .records
+            .get(id)
+            .map(|record| record.receiver.clone())
+            .ok_or_else(|| anyhow::anyhow!("unknown operation id: {id}"))?;
+        let current = receiver.borrow().clone();
+        if current.is_terminal() || request.wait_ms.unwrap_or(0) == 0 {
+            return Ok(current);
+        }
+
+        let wait = std::time::Duration::from_millis(request.wait_ms.unwrap_or(0))
+            .min(OPERATION_WAIT_LIMIT);
+        let _ = tokio::time::timeout(wait, async {
+            loop {
+                if receiver.borrow().is_terminal() {
+                    break;
+                }
+                if receiver.changed().await.is_err() {
+                    break;
+                }
+            }
+        })
+        .await;
+        Ok(receiver.borrow().clone())
     }
 
     /// Get the status of the core instance
@@ -307,6 +478,78 @@ impl CoreManagerService {
 
         Self::notify_state_changed(self.state_changed_notify.clone(), CoreState::Stopped(None));
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::borrow::Cow;
+
+    use chimera_ipc::api::core::v2::{
+        CoreCommandInfo, CoreOperationReq, CoreSubmitReq, OperationOutputInfo, OperationPhase,
+    };
+    use tokio_util::sync::CancellationToken;
+
+    use super::CoreManagerService;
+
+    const OPERATION_ID: &str = "00112233445566778899aabbccddeeff";
+
+    fn service() -> CoreManagerService {
+        let (notify, _receiver) = tokio::sync::mpsc::channel(4);
+        CoreManagerService::new_with_notify(notify, CancellationToken::new())
+    }
+
+    fn stop_request() -> CoreSubmitReq<'static> {
+        CoreSubmitReq {
+            operation_id: Cow::Borrowed(OPERATION_ID),
+            command: CoreCommandInfo::Stop,
+        }
+    }
+
+    #[tokio::test]
+    async fn v2_stop_is_durable_idempotent_and_queryable() {
+        let service = service();
+        let request = stop_request();
+
+        let admitted = service.submit_v2(&request).await.unwrap();
+        assert_eq!(admitted.id, OPERATION_ID);
+
+        let attached = service.submit_v2(&request).await.unwrap();
+        assert_eq!(attached.id, OPERATION_ID);
+
+        let terminal = service
+            .operation_v2(&CoreOperationReq {
+                operation_id: Cow::Borrowed(OPERATION_ID),
+                wait_ms: Some(1_000),
+            })
+            .await
+            .unwrap();
+        assert_eq!(terminal.phase, OperationPhase::Succeeded);
+        assert_eq!(terminal.output, Some(OperationOutputInfo::Stopped));
+        assert_eq!(service.operation_snapshot(OPERATION_ID), Some(terminal));
+    }
+
+    #[tokio::test]
+    async fn v2_operation_id_validation_and_conflict_fail_closed() {
+        let service = service();
+        let invalid = CoreSubmitReq {
+            operation_id: Cow::Borrowed("not-hex"),
+            command: CoreCommandInfo::Stop,
+        };
+        assert!(service.submit_v2(&invalid).await.is_err());
+
+        let request = stop_request();
+        service.submit_v2(&request).await.unwrap();
+        service
+            .operations
+            .lock()
+            .records
+            .get_mut(OPERATION_ID)
+            .unwrap()
+            .fingerprint = "different-command".to_string();
+
+        let error = service.submit_v2(&request).await.unwrap_err();
+        assert!(error.to_string().contains("operation conflict"));
     }
 }
 

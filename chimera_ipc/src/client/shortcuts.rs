@@ -36,6 +36,49 @@ impl<'a> Client<'a> {
         Ok(data)
     }
 
+    pub async fn submit_core_v2(
+        &self,
+        payload: &api::core::v2::CoreSubmitReq<'_>,
+    ) -> Result<'_, api::core::v2::OperationInfo> {
+        let payload = simd_json::serde::to_string(payload)?;
+        let request = Request::post(api::core::v2::CORE_V2_SUBMIT_ENDPOINT)
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from(payload))?;
+        let response = send_request(&self.0, request)
+            .await?
+            .cast_body::<api::core::v2::CoreSubmitRes<'_>>()
+            .await?
+            .ok()?;
+        Ok(response.data.unwrap())
+    }
+
+    pub async fn core_operation_v2(
+        &self,
+        payload: &api::core::v2::CoreOperationReq<'_>,
+    ) -> Result<'_, api::core::v2::OperationInfo> {
+        let payload = simd_json::serde::to_string(payload)?;
+        let request = Request::post(api::core::v2::CORE_V2_OPERATION_ENDPOINT)
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from(payload))?;
+        let response = send_request(&self.0, request)
+            .await?
+            .cast_body::<api::core::v2::CoreOperationRes<'_>>()
+            .await?
+            .ok()?;
+        Ok(response.data.unwrap())
+    }
+
+    pub async fn core_status_v2(&self) -> Result<'_, api::status::CoreInfos> {
+        let request =
+            Request::get(api::core::v2::CORE_V2_STATUS_ENDPOINT).body(Empty::<Bytes>::new())?;
+        let response = send_request(&self.0, request)
+            .await?
+            .cast_body::<api::core::v2::CoreStatusRes<'_>>()
+            .await?
+            .ok()?;
+        Ok(response.data.unwrap())
+    }
+
     pub async fn start_core(&self, payload: &api::core::start::CoreStartReq<'_>) -> Result<'_, ()> {
         let payload = simd_json::serde::to_string(payload)?;
         let request = Request::post(api::core::start::CORE_START_ENDPOINT)
