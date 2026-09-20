@@ -192,6 +192,32 @@ impl CoreManagerService {
         }
     }
 
+    async fn recover_v2(&self) -> anyhow::Result<()> {
+        let spec = {
+            let manager = self.manager.lock().await;
+            let Some(manager) = manager.as_ref() else {
+                return Ok(());
+            };
+            if matches!(Self::state_(Some(manager)).as_ref(), CoreState::Running) {
+                return Ok(());
+            }
+            if self.applied_revision.lock().is_none() {
+                return Ok(());
+            }
+            (
+                manager.instance.core_type.clone(),
+                manager.config_path.clone(),
+            )
+        };
+
+        let applied_revision = self.applied_revision.lock().clone();
+        let api_connection = self.api_connection.lock().clone();
+        let result = self.start(&spec.0, spec.1.as_path()).await;
+        *self.applied_revision.lock() = applied_revision;
+        *self.api_connection.lock() = api_connection;
+        result
+    }
+
     async fn execute_v2(
         &self,
         command: CoreCommandInfo<'static>,
@@ -264,6 +290,10 @@ impl CoreManagerService {
                     *self.api_connection.lock() = None;
                 }
                 Ok(OperationOutputInfo::Stopped)
+            }
+            CoreCommandInfo::Recover => {
+                self.recover_v2().await?;
+                Ok(OperationOutputInfo::Recovered)
             }
         }
     }
@@ -680,6 +710,29 @@ mod tests {
         assert_eq!(terminal.phase, OperationPhase::Succeeded);
         assert_eq!(terminal.output, Some(OperationOutputInfo::Stopped));
         assert_eq!(service.operation_snapshot(OPERATION_ID), Some(terminal));
+    }
+
+    #[tokio::test]
+    async fn v2_recover_is_idempotent_without_applied_runtime() {
+        let service = service();
+        let request = CoreSubmitReq {
+            operation_id: Cow::Borrowed(OPERATION_ID),
+            command: CoreCommandInfo::Recover,
+        };
+
+        service.submit_v2(&request).await.unwrap();
+        let terminal = service
+            .operation_v2(&CoreOperationReq {
+                operation_id: Cow::Borrowed(OPERATION_ID),
+                wait_ms: Some(1_000),
+            })
+            .await
+            .unwrap();
+        assert_eq!(terminal.phase, OperationPhase::Succeeded);
+        assert_eq!(terminal.output, Some(OperationOutputInfo::Recovered));
+        let status = service.status().await;
+        assert!(matches!(status.state, CoreState::Stopped(_)));
+        assert!(status.revision.is_none());
     }
 
     #[tokio::test]

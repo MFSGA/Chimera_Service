@@ -71,6 +71,7 @@ pub enum CoreCommandInfo<'a> {
         expected_applied: Option<RevisionIdInfo>,
     },
     Stop,
+    Recover,
 }
 
 impl CoreCommandInfo<'_> {
@@ -88,6 +89,7 @@ impl CoreCommandInfo<'_> {
                 expected_applied,
             },
             Self::Stop => CoreCommandInfo::Stop,
+            Self::Recover => CoreCommandInfo::Recover,
         }
     }
 }
@@ -136,6 +138,7 @@ pub struct ReconcileOutcomeInfo {
 pub enum OperationOutputInfo {
     Reconciled(ReconcileOutcomeInfo),
     Stopped,
+    Recovered,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -236,6 +239,29 @@ mod tests {
         let decoded: CoreSubmitReq<'_> = serde_json::from_str(&encoded).unwrap();
         assert_eq!(decoded.operation_id, request.operation_id);
         assert!(matches!(decoded.command, CoreCommandInfo::Reconcile { .. }));
+    }
+
+    #[test]
+    fn recover_shape_roundtrips() {
+        let request = CoreSubmitReq {
+            operation_id: Cow::Borrowed("00112233445566778899aabbccddeeff"),
+            command: CoreCommandInfo::Recover,
+        };
+        let encoded = serde_json::to_string(&request).unwrap();
+        assert!(encoded.contains("\"type\":\"recover\""));
+        let decoded: CoreSubmitReq<'_> = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded.operation_id, request.operation_id);
+        assert!(matches!(decoded.command, CoreCommandInfo::Recover));
+
+        let terminal = OperationInfo::succeeded(
+            "00112233445566778899aabbccddeeff",
+            OperationOutputInfo::Recovered,
+        );
+        let encoded = serde_json::to_string(&terminal).unwrap();
+        assert_eq!(
+            serde_json::from_str::<OperationInfo>(&encoded).unwrap(),
+            terminal
+        );
     }
 
     #[test]
