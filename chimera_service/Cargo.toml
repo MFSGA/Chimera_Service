@@ -25,11 +25,10 @@ ctrlc = { version = "3", features = ["termination"] }
 
 tracing-panic = "0.1"
 
-#nyanpasu-utils = { workspace = true, default-features = false, features = [
-#    "dirs",
-#    "os",
-#    "network",
-#] }
+nyanpasu-utils = { workspace = true, default-features = false, features = [
+    "atomic_fs",
+    "process",
+] }
 
 # todo: add the features
 chimera_utils = { workspace = true, default-features = false, features = [
@@ -42,6 +41,7 @@ chimera-ipc = { path = "../chimera_ipc", default-features = false, features = [
     "server",
     "client",
 ] }
+clash-api = { path = "../crates/clash-api" }
 
 thiserror.workspace = true
 anyhow = { workspace = true }
@@ -65,6 +65,7 @@ bounded-vec-deque = "0.1.1"
 parking_lot = "0.12"
 indexmap = { version = "2", features = ["serde"] }
 serde_json = "1"
+serde_yaml = "0.9"
 serde = { workspace = true, features = ["derive"] }
 service-manager = "0.8"
 

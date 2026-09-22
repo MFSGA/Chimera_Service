@@ -1,5 +1,3 @@
-use std::borrow::Cow;
-
 use axum::{Json, extract::State, http::StatusCode};
 use chimera_ipc::api::{
     RBuilder,
@@ -19,7 +17,7 @@ pub async fn submit(
         Ok(info) => (StatusCode::OK, Json(RBuilder::success(info))),
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(RBuilder::other_error(Cow::Owned(error.to_string()))),
+            Json(error.into_envelope()),
         ),
     }
 }
@@ -32,7 +30,7 @@ pub async fn operation(
         Ok(info) => (StatusCode::OK, Json(RBuilder::success(info))),
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(RBuilder::other_error(Cow::Owned(error.to_string()))),
+            Json(error.into_envelope()),
         ),
     }
 }

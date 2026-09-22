@@ -26,4 +26,5 @@ sysinfo = "0.39"
 
 [features]
 default = []
+atomic_fs = []
 process = []

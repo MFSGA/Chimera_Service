@@ -19,7 +19,7 @@ repository = "https://github.com/MFSGA/Chimera_Service"
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 
-nyanpasu-utils = { git = "https://github.com/LibNyanpasu/nyanpasu-utils.git", default-features = false }
+nyanpasu-utils = { path = "crates/nyanpasu-utils", default-features = false }
 
 chimera_utils = { git = "https://github.com/MFSGA/Chimera_Utils.git", default-features = false }
 

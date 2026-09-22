@@ -2,6 +2,8 @@ pub mod consts;
 mod instance;
 mod logger;
 mod routing;
+mod runtime_process;
+mod runtime_store;
 
 use chimera_ipc::{
     SERVICE_PLACEHOLDER,
@@ -24,6 +26,7 @@ pub async fn run(
 ) -> Result<(), anyhow::Error> {
     let (tx, mut rx) = tokio::sync::mpsc::channel(10);
     let core_manager = CoreManager::new_with_notify(tx, token.clone());
+    core_manager.initialize_runtime_store().await?;
     let state = AppState {
         core_manager,
         ws_state: WsState::default(),

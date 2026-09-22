@@ -409,6 +409,7 @@ dependencies = [
  "chrono",
  "clap",
  "clap_complete",
+ "clash-api",
  "colored",
  "console-subscriber",
  "constcat",
@@ -417,11 +418,13 @@ dependencies = [
  "dunce",
  "futures-util",
  "indexmap",
+ "nyanpasu-utils",
  "parking_lot",
  "rustc_version",
  "semver",
  "serde",
  "serde_json",
+ "serde_yaml",
  "service-manager",
  "supports-color",
  "sysinfo 0.39.6",
@@ -545,7 +548,19 @@ checksum = "3a822ea5bc7590f9d40f1ba12c0dc3c2760f3482c6984db1573ad11031420831"
 name = "clash-api"
 version = "0.2.0"
 dependencies = [
+ "axum",
+ "bytes",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "interprocess",
+ "serde",
+ "serde_json",
+ "serde_urlencoded",
+ "specta",
  "thiserror 2.0.20",
+ "tokio",
+ "tracing",
  "url",
 ]
 
@@ -2428,6 +2443,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_yaml"
+version = "0.9.34+deprecated"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a8b1a1a2ebf674015cc02edccce75287f1a0130d394307b36743c2f5d504b47"
+dependencies = [
+ "indexmap",
+ "itoa",
+ "ryu",
+ "serde",
+ "unsafe-libyaml",
+]
+
+[[package]]
 name = "service-manager"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3103,6 +3131,12 @@ name = "unicode-ident"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
+
+[[package]]
+name = "unsafe-libyaml"
+version = "0.2.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "673aac59facbab8a9007c7f6108d11f63b603f7cabff99fabf650fea5c32b861"
 
 [[package]]
 name = "url"
