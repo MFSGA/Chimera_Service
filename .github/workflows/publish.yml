@@ -215,14 +215,14 @@ jobs:
             chimera-service-${{ matrix.profile.target }}.zip.sha256
 
   publish_release:
-    name: Publish validated release
+    name: Publish release candidate
     needs: [publish, release_macos, release_linux, release_windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Publish draft release
+      - name: Publish prerelease candidate
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: v${{ needs.publish.outputs.version }}
-        run: gh release edit "$RELEASE_TAG" --draft=false --repo "${{ github.repository }}"
+        run: gh release edit "$RELEASE_TAG" --draft=false --prerelease --repo "${{ github.repository }}"

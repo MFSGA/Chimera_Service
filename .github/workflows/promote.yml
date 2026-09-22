@@ -1,0 +1,88 @@
+name: Promote Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Validated Chimera Service tag (for example v1.10.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    name: Promote validated candidate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout candidate tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+
+      - name: Validate tag matches manifests
+        id: version
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          SERVICE_VERSION=$(python - <<'PY'
+          import tomllib
+          with open("chimera_service/Cargo.toml", "rb") as handle:
+              print(tomllib.load(handle)["package"]["version"])
+          PY
+          )
+          IPC_VERSION=$(python - <<'PY'
+          import tomllib
+          with open("chimera_ipc/Cargo.toml", "rb") as handle:
+              print(tomllib.load(handle)["package"]["version"])
+          PY
+          )
+          test "$SERVICE_VERSION" = "$IPC_VERSION"
+          test "$RELEASE_TAG" = "v$SERVICE_VERSION"
+          echo "version=$SERVICE_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Verify candidate state and complete assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = "false"
+          test "$(gh release view "$RELEASE_TAG" --json isPrerelease --jq .isPrerelease)" = "true"
+
+          gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' | sort > /tmp/actual-assets.txt
+          cat > /tmp/expected-assets.txt <<'EOF'
+          chimera-service-aarch64-apple-darwin.tar.gz
+          chimera-service-aarch64-apple-darwin.tar.gz.sha256
+          chimera-service-aarch64-pc-windows-msvc.zip
+          chimera-service-aarch64-pc-windows-msvc.zip.sha256
+          chimera-service-aarch64-unknown-linux-gnu.tar.gz
+          chimera-service-aarch64-unknown-linux-gnu.tar.gz.sha256
+          chimera-service-aarch64-unknown-linux-musl.tar.gz
+          chimera-service-aarch64-unknown-linux-musl.tar.gz.sha256
+          chimera-service-i686-pc-windows-msvc.zip
+          chimera-service-i686-pc-windows-msvc.zip.sha256
+          chimera-service-i686-unknown-linux-gnu.tar.gz
+          chimera-service-i686-unknown-linux-gnu.tar.gz.sha256
+          chimera-service-i686-unknown-linux-musl.tar.gz
+          chimera-service-i686-unknown-linux-musl.tar.gz.sha256
+          chimera-service-x86_64-apple-darwin.tar.gz
+          chimera-service-x86_64-apple-darwin.tar.gz.sha256
+          chimera-service-x86_64-pc-windows-msvc.zip
+          chimera-service-x86_64-pc-windows-msvc.zip.sha256
+          chimera-service-x86_64-unknown-linux-gnu.tar.gz
+          chimera-service-x86_64-unknown-linux-gnu.tar.gz.sha256
+          chimera-service-x86_64-unknown-linux-musl.tar.gz
+          chimera-service-x86_64-unknown-linux-musl.tar.gz.sha256
+          EOF
+          sort -o /tmp/expected-assets.txt /tmp/expected-assets.txt
+          diff -u /tmp/expected-assets.txt /tmp/actual-assets.txt
+
+      - name: Promote candidate to stable
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: gh release edit "$RELEASE_TAG" --prerelease=false --repo "${{ github.repository }}"
