@@ -359,3 +359,44 @@ pub async fn sync_dir(dir: impl AsRef<Path>) -> std::io::Result<()> {
 pub async fn sync_dir(_dir: impl AsRef<Path>) -> std::io::Result<()> {
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn atomic_move_new_never_clobbers_existing_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source");
+        let target = dir.path().join("target");
+        tokio::fs::write(&source, b"new").await.unwrap();
+        tokio::fs::write(&target, b"old").await.unwrap();
+
+        let error = atomic_move_new(&source, &target).await.unwrap_err();
+        assert!(matches!(
+            error,
+            AtomicFsError::Io(error) if error.kind() == std::io::ErrorKind::AlreadyExists
+        ));
+        assert_eq!(tokio::fs::read(&target).await.unwrap(), b"old");
+        assert!(source.exists());
+    }
+
+    #[tokio::test]
+    async fn atomic_replace_publishes_complete_replacement() {
+        let dir = tempfile::tempdir().unwrap();
+        let replacement = dir.path().join("replacement");
+        let destination = dir.path().join("destination");
+        tokio::fs::write(&replacement, b"new").await.unwrap();
+        tokio::fs::write(&destination, b"old").await.unwrap();
+
+        atomic_replace(AtomicReplacement {
+            replacement: &replacement,
+            destination: &destination,
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(tokio::fs::read(&destination).await.unwrap(), b"new");
+        assert!(!replacement.exists());
+    }
+}

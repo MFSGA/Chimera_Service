@@ -219,7 +219,7 @@ impl RuntimeConfigStore {
         #[cfg(test)]
         let injected_failure = self
             .replace_parent_sync_failures
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |remaining| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |remaining| {
                 remaining.checked_sub(1)
             })
             .is_ok();

@@ -2656,7 +2656,9 @@ ss-config: ss://old
 
     #[tokio::test]
     async fn v2_startup_orphan_sweep_reaps_owned_process_and_seeds_allocator() {
-        use nyanpasu_utils::process::{Command, EpochPidFile, EpochPidFileSpec};
+        use nyanpasu_utils::process::{
+            Command, EpochPidRecord, inspect_process_identity, publish_epoch_pid_file,
+        };
 
         let service = service();
         let epoch = 21;
@@ -2677,15 +2679,23 @@ ss-config: ss://old
         #[cfg(unix)]
         let command = Command::new("/bin/sleep").arg("30");
 
-        let (handle, _events) = command
-            .epoch_pid_file(EpochPidFile::new(EpochPidFileSpec {
-                pid_path: pid_path.as_std_path(),
-                runtime_config: config_path.as_std_path(),
-                epoch,
-            }))
-            .spawn()
+        let (handle, _events) = command.spawn().await.unwrap();
+        let identity = inspect_process_identity(handle.pid())
             .await
-            .unwrap();
+            .unwrap()
+            .expect("spawned process identity");
+        publish_epoch_pid_file(
+            pid_path.as_std_path(),
+            &EpochPidRecord {
+                pid: handle.pid(),
+                epoch,
+                executable: identity.executable,
+                start_token: identity.start_token,
+                runtime_config: config_path.as_std_path().to_owned(),
+            },
+        )
+        .await
+        .unwrap();
 
         let max_seen = service.sweep_orphans_with_store(&store).await.unwrap();
 
@@ -3103,7 +3113,8 @@ ss-config: ss://old
     #[tokio::test]
     async fn v2_quarantine_recovery_reaps_identity_verified_epoch_process() {
         use nyanpasu_utils::process::{
-            Command, EpochPidFile, EpochPidFileSpec, read_epoch_pid_file,
+            Command, EpochPidRecord, inspect_process_identity, publish_epoch_pid_file,
+            read_epoch_pid_file,
         };
 
         let service = service();
@@ -3125,15 +3136,23 @@ ss-config: ss://old
         #[cfg(unix)]
         let command = Command::new("/bin/sleep").arg("30");
 
-        let (handle, mut events) = command
-            .epoch_pid_file(EpochPidFile::new(EpochPidFileSpec {
-                pid_path: pid_path.as_std_path(),
-                runtime_config: config_path.as_std_path(),
-                epoch,
-            }))
-            .spawn()
+        let (handle, mut events) = command.spawn().await.unwrap();
+        let identity = inspect_process_identity(handle.pid())
             .await
-            .unwrap();
+            .unwrap()
+            .expect("spawned process identity");
+        publish_epoch_pid_file(
+            pid_path.as_std_path(),
+            &EpochPidRecord {
+                pid: handle.pid(),
+                epoch,
+                executable: identity.executable,
+                start_token: identity.start_token,
+                runtime_config: config_path.as_std_path().to_owned(),
+            },
+        )
+        .await
+        .unwrap();
         let record = read_epoch_pid_file(pid_path.as_std_path())
             .await
             .unwrap()
