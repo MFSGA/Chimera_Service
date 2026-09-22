@@ -129,7 +129,14 @@ pub enum ReconcileOutcomeKind {
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct ReconcileOutcomeInfo {
     pub outcome: ReconcileOutcomeKind,
+    /// The revision the core is actually running after the transaction.
     pub revision: ConfigRevisionInfo,
+    /// A non-fatal durability/degradation warning survived by the transaction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
+    /// Why the desired runtime failed when the transaction rolled back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failed_apply: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -144,6 +151,8 @@ pub enum OperationOutputInfo {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct OperationErrorInfo {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<Cow<'static, str>>,
     pub message: String,
     pub retryable: bool,
 }
@@ -188,13 +197,23 @@ impl OperationInfo {
     }
 
     pub fn failed(id: impl Into<String>, message: impl Into<String>) -> Self {
+        Self::failed_with_kind(id, None, message, false)
+    }
+
+    pub fn failed_with_kind(
+        id: impl Into<String>,
+        kind: Option<crate::api::CoreErrorKind>,
+        message: impl Into<String>,
+        retryable: bool,
+    ) -> Self {
         Self {
             id: id.into(),
             phase: OperationPhase::Failed,
             output: None,
             error: Some(OperationErrorInfo {
+                kind: kind.map(|kind| Cow::Borrowed(kind.as_str())),
                 message: message.into(),
-                retryable: false,
+                retryable,
             }),
         }
     }
@@ -286,6 +305,52 @@ mod tests {
     }
 
     #[test]
+    fn typed_terminal_error_roundtrips_kind_and_retryable() {
+        let terminal = OperationInfo::failed_with_kind(
+            "00112233445566778899aabbccddeeff",
+            Some(crate::api::CoreErrorKind::RevisionConflict),
+            "stale revision",
+            false,
+        );
+        let encoded = serde_json::to_string(&terminal).unwrap();
+        assert!(encoded.contains("\"kind\":\"revision_conflict\""));
+        assert!(encoded.contains("\"retryable\":false"));
+        assert_eq!(
+            serde_json::from_str::<OperationInfo>(&encoded).unwrap(),
+            terminal
+        );
+
+        let legacy =
+            OperationInfo::failed("00112233445566778899aabbccddeeff", "unclassified failure");
+        let encoded = serde_json::to_string(&legacy).unwrap();
+        assert!(!encoded.contains("\"kind\""));
+    }
+
+    #[test]
+    fn rolled_back_output_roundtrips_failure_reason() {
+        let terminal = OperationInfo::succeeded(
+            "00112233445566778899aabbccddeeff",
+            OperationOutputInfo::Reconciled(ReconcileOutcomeInfo {
+                outcome: ReconcileOutcomeKind::RolledBack,
+                revision: ConfigRevisionInfo {
+                    epoch: 7,
+                    generation: 3,
+                    source_hash: "old-source".into(),
+                    effective_hash: "old-effective".into(),
+                },
+                warning: None,
+                failed_apply: Some("desired runtime failed readiness".into()),
+            }),
+        );
+        let encoded = serde_json::to_string(&terminal).unwrap();
+        assert!(encoded.contains("\"failed_apply\":\"desired runtime failed readiness\""));
+        assert_eq!(
+            serde_json::from_str::<OperationInfo>(&encoded).unwrap(),
+            terminal
+        );
+    }
+
+    #[test]
     fn terminal_output_roundtrips() {
         let terminal = OperationInfo::succeeded(
             "00112233445566778899aabbccddeeff",
@@ -297,6 +362,8 @@ mod tests {
                     source_hash: "0123456789abcdef".into(),
                     effective_hash: "0123456789abcdef".into(),
                 },
+                warning: None,
+                failed_apply: None,
             }),
         );
         let encoded = serde_json::to_string(&terminal).unwrap();

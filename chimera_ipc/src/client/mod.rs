@@ -15,7 +15,7 @@ pub mod shortcuts;
 mod wrapper;
 use wrapper::BodyDataStreamExt;
 
-use crate::api::R;
+use crate::api::{CoreErrorKind, R};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ClientError<'a> {
@@ -31,6 +31,28 @@ pub enum ClientError<'a> {
     ServerResponseFailed(R<'a, Option<()>>),
     #[error("An error occurred: {0}")]
     Other(#[from] anyhow::Error),
+}
+
+impl ClientError<'_> {
+    pub fn core_error_kind(&self) -> Option<CoreErrorKind> {
+        match self {
+            Self::ServerResponseFailed(response) => response
+                .error_kind
+                .as_deref()
+                .and_then(CoreErrorKind::from_wire),
+            _ => None,
+        }
+    }
+
+    pub fn retryable(&self) -> bool {
+        match self {
+            Self::ServerResponseFailed(response) => response.retryable.unwrap_or_else(|| {
+                self.core_error_kind()
+                    .is_some_and(|kind| kind.default_retryable())
+            }),
+            _ => false,
+        }
+    }
 }
 
 pub struct Response {
@@ -72,6 +94,38 @@ where
         )));
     }
     Ok(Response { response })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::borrow::Cow;
+
+    use crate::api::{CoreErrorKind, RBuilder};
+
+    use super::ClientError;
+
+    #[test]
+    fn server_error_kind_and_retryability_survive_client_decoding() {
+        let response = RBuilder::<Option<()>>::other_error_with_kind(
+            Cow::Borrowed("backend unavailable"),
+            Some(CoreErrorKind::BackendUnavailable),
+            None,
+        );
+        let error = ClientError::ServerResponseFailed(response);
+        assert_eq!(
+            error.core_error_kind(),
+            Some(CoreErrorKind::BackendUnavailable)
+        );
+        assert!(error.retryable());
+
+        let response = RBuilder::<Option<()>>::other_error_with_kind(
+            Cow::Borrowed("do not retry"),
+            Some(CoreErrorKind::BackendUnavailable),
+            Some(false),
+        );
+        let error = ClientError::ServerResponseFailed(response);
+        assert!(!error.retryable());
+    }
 }
 
 impl Response {
