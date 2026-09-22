@@ -2,16 +2,6 @@ name: Publish
 
 on:
   workflow_dispatch:
-    inputs:
-      versionType:
-        type: choice
-        description: "<major|minor|patch>"
-        required: true
-        default: "patch"
-        options:
-          - major
-          - minor
-          - patch
 
 permissions:
   contents: write
@@ -19,9 +9,9 @@ permissions:
 
 jobs:
   publish:
-    name: Publish ${{ inputs.versionType }} release
+    name: Validate and create draft release
     outputs:
-      version: ${{ steps.update-version.outputs.version }}
+      version: ${{ steps.release-version.outputs.version }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -34,13 +24,6 @@ jobs:
           rustup toolchain install -c clippy -c rustfmt --profile minimal nightly
           rustup default nightly
 
-      - name: Install cargo-binstall
-        uses: cargo-bins/cargo-binstall@v1.23.0
-      - name: Install cargo-edit
-        run: |
-          cargo binstall cargo-edit -y
-      - name: Install git-cliff
-        uses: taiki-e/install-action@git-cliff
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
@@ -50,52 +33,35 @@ jobs:
           shared-key: ${{ runner.os }}-ci
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - id: update-version
+      - id: release-version
         shell: bash
-        name: Bump version
-        # Use npm because yarn is for some reason not able to output only the version name
+        name: Validate release version
         run: |
-          cargo set-version --workspace --bump ${{ inputs.versionType }}
-          VERSION=$(deno run --allow-read .github/scripts/get-version.ts --path ./chimera_service/Cargo.toml | head -n 1)
-          echo "$VERSION"
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-      - name: Generate a changelog for the new version
-        shell: bash
-        id: build-changelog
-        run: |
-          touch /tmp/changelog.md
-          git-cliff --config  cliff.toml --verbose --strip header --unreleased --tag v${{ steps.update-version.outputs.version }} > /tmp/changelog.md
-          if [ $? -eq 0 ]; then
-            CONTENT=$(cat /tmp/changelog.md)
-            cat /tmp/changelog.md | cat - ./CHANGELOGS.md > temp && mv temp ./CHANGELOGS.md
-            {
-              echo 'content<<EOF'
-              echo "$CONTENT"
-              echo EOF
-            } >> $GITHUB_OUTPUT
-            echo "version=${{ steps.update-version.outputs.version }}" >> $GITHUB_OUTPUT
-          else
-            echo "Failed to generate changelog"
+          SERVICE_VERSION=$(deno run --allow-read .github/scripts/get-version.ts --path ./chimera_service/Cargo.toml | head -n 1)
+          IPC_VERSION=$(deno run --allow-read .github/scripts/get-version.ts --path ./chimera_ipc/Cargo.toml | head -n 1)
+          test -n "$SERVICE_VERSION"
+          test "$SERVICE_VERSION" = "$IPC_VERSION"
+          if git ls-remote --exit-code --tags origin "refs/tags/v$SERVICE_VERSION" >/dev/null 2>&1; then
+            echo "tag v$SERVICE_VERSION already exists" >&2
             exit 1
           fi
-        env:
-          GITHUB_REPO: ${{ github.repository }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Commit changes
-        uses: stefanzweifel/git-auto-commit-action@v7
-        with:
-          commit_message: "chore: bump version to v${{ steps.update-version.outputs.version }}"
-          commit_user_name: "github-actions[bot]"
-          commit_user_email: "41898282+github-actions[bot]@users.noreply.github.com"
-          tagging_message: "v${{ steps.update-version.outputs.version }}"
-      - name: Release
+          echo "version=$SERVICE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Validated runtime version v$SERVICE_VERSION"
+      - name: Check formatting
+        run: cargo +nightly fmt --all -- --check
+      - name: Test release workspace
+        run: cargo +nightly test --workspace --locked -- --test-threads=1
+      - name: Verify clean release tree
+        shell: bash
+        run: test -z "$(git status --porcelain)"
+      - name: Create draft release
         uses: softprops/action-gh-release@v2
         with:
-          # draft: true
-          body: ${{steps.build-changelog.outputs.content}}
-          name: Chimera Service v${{steps.update-version.outputs.version}}
-          tag_name: "v${{ steps.update-version.outputs.version }}"
-          # target_commitish: ${{ steps.tag.outputs.sha }}
+          draft: true
+          generate_release_notes: true
+          name: Chimera Service v${{ steps.release-version.outputs.version }}
+          tag_name: "v${{ steps.release-version.outputs.version }}"
+          target_commitish: ${{ github.sha }}
   release_macos:
     needs: [publish]
     name: Release v${{ needs.publish.outputs.version }} for macOS
@@ -247,3 +213,16 @@ jobs:
           files: |
             chimera-service-${{ matrix.profile.target }}.zip
             chimera-service-${{ matrix.profile.target }}.zip.sha256
+
+  publish_release:
+    name: Publish validated release
+    needs: [publish, release_macos, release_linux, release_windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Publish draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: v${{ needs.publish.outputs.version }}
+        run: gh release edit "$RELEASE_TAG" --draft=false --repo "${{ github.repository }}"
