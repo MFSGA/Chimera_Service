@@ -217,6 +217,9 @@ pub struct OperationInfo {
 
 pub type CoreSubmitRes<'a> = R<'a, OperationInfo>;
 pub type CoreOperationRes<'a> = R<'a, OperationInfo>;
+pub type CoreStatusRes<'a> = R<'a, crate::api::status::CoreInfos>;
+pub type CoreEffectiveConfigRes<'a> = R<'a, Option<CoreEffectiveConfig>>;
+pub type CoreApiConnectionRes<'a> = R<'a, Option<CoreApiConnection>>;
 
 #[cfg(test)]
 mod tests {
