@@ -33,6 +33,63 @@ pub enum ClientError<'a> {
     Other(#[from] anyhow::Error),
 }
 
+impl ClientError<'_> {
+    /// The raw server classification, when the IPC service returned an error
+    /// envelope. Keep the string so callers can preserve kinds introduced by
+    /// a newer service build.
+    pub fn server_error_kind(&self) -> Option<&str> {
+        match self {
+            Self::ServerResponseFailed(response) => response.error_kind.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// The service's explicit retryability answer, when present. `None` means
+    /// the service did not classify this request well enough to answer.
+    pub fn server_retryable(&self) -> Option<bool> {
+        match self {
+            Self::ServerResponseFailed(response) => response.retryable,
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::borrow::Cow;
+
+    use crate::api::{R, ResponseCode};
+
+    use super::ClientError;
+
+    fn server_error<'a>(kind: Option<&'a str>, retryable: Option<bool>) -> ClientError<'a> {
+        ClientError::ServerResponseFailed(R {
+            code: ResponseCode::OtherError,
+            msg: Cow::Borrowed("request failed"),
+            data: None,
+            ts: 1,
+            error_kind: kind.map(Cow::Borrowed),
+            retryable,
+        })
+    }
+
+    #[test]
+    fn server_error_accessors_preserve_known_and_future_kinds() {
+        let error = server_error(Some("future_kind"), Some(true));
+
+        assert_eq!(error.server_error_kind(), Some("future_kind"));
+        assert_eq!(error.server_retryable(), Some(true));
+    }
+
+    #[test]
+    fn transport_errors_have_no_server_classification() {
+        let error = ClientError::Other(anyhow::anyhow!("transport unavailable"));
+
+        assert_eq!(error.server_error_kind(), None);
+        assert_eq!(error.server_retryable(), None);
+    }
+}
+
 pub struct Response {
     response: HyperResponse<Incoming>,
 }
