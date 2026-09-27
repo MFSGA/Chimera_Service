@@ -27,6 +27,18 @@ pub enum ClientError<'a> {
     Http(#[from] hyper::http::Error),
     #[error("An error occurred: {0}")]
     ParseFailed(#[from] simd_json::Error),
+    #[error("IPC WebSocket `{operation}` failed: {source}")]
+    WebSocket {
+        operation: &'static str,
+        #[source]
+        source: tokio_tungstenite::tungstenite::Error,
+    },
+    #[error("IPC event `{operation}` failed to decode: {source}")]
+    EventDecode {
+        operation: &'static str,
+        #[source]
+        source: serde_json::Error,
+    },
     #[error("An server error respond: {0:?}")]
     ServerResponseFailed(R<'a, Option<()>>),
     #[error("An error occurred: {0}")]

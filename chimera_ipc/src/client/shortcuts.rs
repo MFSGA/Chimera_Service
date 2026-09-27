@@ -1,9 +1,19 @@
-use std::{borrow::Cow, sync::OnceLock};
+use std::{
+    borrow::Cow,
+    pin::Pin,
+    sync::OnceLock,
+    task::{Context, Poll},
+    time::Duration,
+};
 
 use axum::body::Body;
+use backon::{BackoffBuilder, ExponentialBuilder};
 use bytes::Bytes;
+use futures_util::{SinkExt, Stream, StreamExt};
 use http_body_util::Empty;
 use hyper::{Request, header::CONTENT_TYPE};
+use interprocess::local_socket::tokio::{Stream as LocalSocketStream, prelude::*};
+use tokio_tungstenite::{WebSocketStream, client_async, tungstenite::Message};
 
 use crate::{SERVICE_PLACEHOLDER, api, client::send_request};
 
@@ -23,6 +33,99 @@ impl<'a> Client<'a> {
     pub fn service_default() -> &'static Client<'static> {
         static CLIENT: OnceLock<Client<'static>> = OnceLock::new();
         CLIENT.get_or_init(|| Client::new(SERVICE_PLACEHOLDER))
+    }
+
+    /// Subscribe to events pushed by the Service over `/ws/events`.
+    ///
+    /// The connection uses the same local socket as HTTP requests. Windows
+    /// named-pipe busy errors are retried before the WebSocket handshake starts;
+    /// an established stream or a handshake failure is never replayed.
+    pub async fn events(&self) -> Result<'_, EventStream> {
+        const EVENT_URL: &str = "ws://chimera-service.localipc/ws/events";
+
+        let websocket = self.connect_event_stream(EVENT_URL).await?;
+        let events = futures_util::stream::unfold(
+            (websocket, false),
+            |(mut websocket, closed)| async move {
+                if closed {
+                    return None;
+                }
+                loop {
+                    match websocket.next().await {
+                        Some(Ok(Message::Text(text))) => {
+                            return Some((decode_event(text.as_bytes()), (websocket, false)));
+                        }
+                        Some(Ok(Message::Binary(bytes))) => {
+                            return Some((decode_event(&bytes), (websocket, false)));
+                        }
+                        Some(Ok(Message::Ping(payload))) => {
+                            if let Err(source) = websocket.send(Message::Pong(payload)).await {
+                                return Some((
+                                    Err(ClientError::WebSocket {
+                                        operation: api::ws::events::EVENT_URI,
+                                        source,
+                                    }),
+                                    (websocket, true),
+                                ));
+                            }
+                        }
+                        Some(Ok(Message::Pong(_))) => {}
+                        Some(Ok(Message::Close(_))) | None => return None,
+                        Some(Ok(_)) => {}
+                        Some(Err(source)) => {
+                            return Some((
+                                Err(ClientError::WebSocket {
+                                    operation: api::ws::events::EVENT_URI,
+                                    source,
+                                }),
+                                (websocket, true),
+                            ));
+                        }
+                    }
+                }
+            },
+        );
+        Ok(EventStream {
+            inner: Box::pin(events),
+        })
+    }
+
+    async fn connect_event_stream(
+        &self,
+        uri: &'static str,
+    ) -> Result<'_, WebSocketStream<LocalSocketStream>> {
+        let started = tokio::time::Instant::now();
+        let mut backoff = ExponentialBuilder::default()
+            .with_min_delay(Duration::from_millis(50))
+            .with_max_delay(Duration::from_millis(200))
+            .with_jitter()
+            .without_max_times()
+            .build();
+
+        loop {
+            let name = crate::utils::get_name(&self.0)?;
+            match LocalSocketStream::connect(name).await {
+                Ok(socket) => {
+                    return client_async(uri, socket)
+                        .await
+                        .map(|(websocket, _response)| websocket)
+                        .map_err(|source| ClientError::WebSocket {
+                            operation: api::ws::events::EVENT_URI,
+                            source,
+                        });
+                }
+                Err(error) if cfg!(windows) && error.raw_os_error() == Some(231) => {
+                    let Some(delay) = backoff.next() else {
+                        return Err(error.into());
+                    };
+                    if started.elapsed() + delay > Duration::from_secs(1) {
+                        return Err(error.into());
+                    }
+                    tokio::time::sleep(delay).await;
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
     }
 
     pub async fn status(&self) -> Result<'_, api::status::StatusResBody<'_>> {
@@ -187,5 +290,33 @@ impl<'a> Client<'a> {
             .await?;
         response.ok()?;
         Ok(())
+    }
+}
+
+fn decode_event(bytes: &[u8]) -> Result<'static, api::ws::events::Event> {
+    serde_json::from_slice(bytes).map_err(|source| ClientError::EventDecode {
+        operation: api::ws::events::EVENT_URI,
+        source,
+    })
+}
+
+/// A decoded event stream from the local IPC Service endpoint.
+pub struct EventStream {
+    inner: Pin<Box<dyn Stream<Item = Result<'static, api::ws::events::Event>> + Send>>,
+}
+
+impl Stream for EventStream {
+    type Item = Result<'static, api::ws::events::Event>;
+
+    fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.inner.poll_next_unpin(context)
+    }
+}
+
+impl std::fmt::Debug for EventStream {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("EventStream")
+            .finish_non_exhaustive()
     }
 }
