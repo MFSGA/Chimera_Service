@@ -9,6 +9,7 @@ client = ["dep:axum"]
 specta = ["dep:specta", "chimera_utils/specta"]
 
 [dependencies]
+chimera-core-metadata = { package = "chimera-service-core-metadata", path = "../crates/chimera-core-metadata" }
 chimera_utils = { workspace = true, default-features = false, features = [
     "core_manager",
     "serde",
@@ -16,7 +17,7 @@ chimera_utils = { workspace = true, default-features = false, features = [
 tokio = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
-serde = { workspace = true }
+serde = { workspace = true, features = ["rc"] }
 tracing = { workspace = true }
 derive_builder = "0.20"
 interprocess = { version = "2.3.1", features = ["tokio"] }
@@ -40,7 +41,7 @@ widestring = { version = "1", optional = true }
 tracing-attributes = { workspace = true }
 simd-json = { workspace = true }
 
-specta = { version = "^2.0.0-rc.22", features = ["derive"], optional = true }
+specta = { version = "^2.0.0-rc.22", features = ["derive", "indexmap", "serde_json"], optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true }

@@ -1,77 +1,183 @@
 pub mod consts;
-mod instance;
+mod controller_access;
+mod events;
 mod logger;
+mod manager_bridge;
 mod routing;
 
+use std::sync::Arc;
+
+use chimera_core_manager::{ExecutorExit, LocalIpcPolicy};
 use chimera_ipc::{
     SERVICE_PLACEHOLDER,
     api::ws::events::{Event as WsEvent, TraceLog},
     server::create_server,
 };
-pub use instance::CoreManagerService as CoreManager;
+use consts::RuntimeInfos;
+pub use events::EventHub;
 pub use logger::Logger;
+pub use manager_bridge::{CoreManagerService as CoreManager, ServiceDirs};
 use routing::{AppState, create_router};
 use tokio_util::sync::CancellationToken;
 use tracing_attributes::instrument;
 
-use crate::server::routing::ws::WsState;
+const SERVER_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
-#[instrument]
+#[instrument(skip(runtime))]
 pub async fn run(
+    runtime: RuntimeInfos,
+    local_ipc_policy: LocalIpcPolicy,
     token: CancellationToken,
     #[cfg(windows)] sids: &[&str],
     #[cfg(not(windows))] sids: (),
 ) -> Result<(), anyhow::Error> {
-    let (tx, mut rx) = tokio::sync::mpsc::channel(10);
-    let core_manager = CoreManager::new_with_notify(tx, token.clone());
-    let state = AppState {
-        core_manager,
-        ws_state: WsState::default(),
-    };
-    let ws_state = state.ws_state.clone();
-    tokio::spawn(async move {
-        while let Some(state) = rx.recv().await {
-            tracing::info!("State changed: {:?}", state);
-            ws_state
-                .event_broadcast(WsEvent::new_core_state_changed(state))
-                .await;
-        }
-    });
-    let ws_state = state.ws_state.clone();
-    let tokio_handle = tokio::runtime::Handle::current();
+    let runtime_dir =
+        camino::Utf8PathBuf::from_path_buf(crate::utils::dirs::service_core_runtime_dir())
+            .map_err(|path| anyhow::anyhow!("core runtime dir is not UTF-8: {}", path.display()))?;
+    let data_dir = camino::Utf8PathBuf::from_path_buf(runtime.nyanpasu_data_dir.clone())
+        .map_err(|path| anyhow::anyhow!("nyanpasu data dir is not UTF-8: {}", path.display()))?;
+    let (controller_dir, access): (_, Arc<dyn chimera_core_manager::ControllerAccess>) =
+        controller_access_for_host(sids)?;
+    let core_manager = CoreManager::with_controller_access(
+        ServiceDirs {
+            runtime: runtime_dir,
+            data: data_dir,
+        },
+        local_ipc_policy,
+        controller_dir,
+        access,
+    )
+    .await?;
+    let hub = EventHub::new();
+    core_manager.spawn_bridges(hub.clone());
+
+    // Preserve Chimera's service tracing event while the manager owns status
+    // and core-log events through the reference EventHub.
+    let log_hub = hub.clone();
     Logger::global().set_subscriber(Box::new(move |logging| {
-        let ws_state = ws_state.clone();
-        tokio_handle.spawn(async move {
-            ws_state
-                .event_broadcast(WsEvent::new_log(TraceLog {
-                    timestamp: logging.timestamp,
-                    level: logging.level,
-                    message: logging
-                        .fields
-                        .get("message")
-                        .and_then(|v| v.as_str().map(|s| s.to_string()))
-                        .unwrap_or("".to_string()),
-                    target: logging
-                        .fields
-                        .get("target")
-                        .and_then(|v| v.as_str().map(|s| s.to_string()))
-                        .unwrap_or("".to_string()),
-                    fields: logging.fields,
-                }))
-                .await;
-        });
+        log_hub.send(WsEvent::new_log(TraceLog {
+            timestamp: logging.timestamp,
+            level: logging.level,
+            message: logging
+                .fields
+                .get("message")
+                .and_then(|value| value.as_str().map(str::to_owned))
+                .unwrap_or_default(),
+            target: logging
+                .fields
+                .get("target")
+                .and_then(|value| value.as_str().map(str::to_owned))
+                .unwrap_or_default(),
+            fields: logging.fields,
+        }));
     }));
 
+    let state = AppState {
+        core_manager: core_manager.clone(),
+        hub,
+        runtime: Arc::new(runtime),
+    };
     let app = create_router(state);
     tracing::info!("Starting server...");
-    create_server(
+    let shutdown_token = token.clone();
+    let server = create_server(
         SERVICE_PLACEHOLDER,
         app,
         Some(async move {
-            token.cancelled().await;
+            shutdown_token.cancelled().await;
         }),
         sids,
-    )
-    .await?;
+    );
+    tokio::pin!(server);
+    tokio::select! {
+        result = &mut server => {
+            core_manager.shutdown().await;
+            result?;
+        }
+        _ = token.cancelled() => {
+            core_manager.shutdown().await;
+            drain(&mut server).await?;
+        }
+        // The control plane owns every core transaction. If its executor is
+        // gone the daemon cannot serve `/v2/core/*` truthfully, so it stops
+        // rather than answering with a control plane that is not there.
+        exit = core_manager.until_control_closed() => {
+            if exit == ExecutorExit::Died {
+                tracing::error!("the core control executor died; shutting the service down");
+                core_manager.shutdown().await;
+                drain(&mut server).await?;
+                anyhow::bail!("the core control executor died");
+            }
+            // Clean: a local shutdown already ran. Nothing maps `Shutdown` onto
+            // the wire, so this is the service's own teardown finishing.
+            core_manager.shutdown().await;
+            drain(&mut server).await?;
+        }
+    }
     Ok(())
+}
+
+async fn drain<E: std::error::Error + Send + Sync + 'static>(
+    server: impl std::future::Future<Output = Result<(), E>> + Unpin,
+) -> Result<(), anyhow::Error> {
+    match tokio::time::timeout(SERVER_DRAIN_TIMEOUT, server).await {
+        Ok(result) => result?,
+        Err(_) => tracing::warn!(
+            "pipe server did not drain within {SERVER_DRAIN_TIMEOUT:?}; abandoning open connections"
+        ),
+    }
+    Ok(())
+}
+
+fn controller_access_for_host(
+    #[cfg(windows)] sids: &[&str],
+    #[cfg(not(windows))] _sids: (),
+) -> anyhow::Result<(
+    Option<camino::Utf8PathBuf>,
+    Arc<dyn chimera_core_manager::ControllerAccess>,
+)> {
+    #[cfg(windows)]
+    {
+        Ok((
+            None,
+            Arc::new(controller_access::WindowsControllerAccess::new(sids)?),
+        ))
+    }
+    #[cfg(unix)]
+    {
+        // The installation establishes this authorization group for GUI users.
+        let mut group = std::mem::MaybeUninit::<libc::group>::uninit();
+        let mut result = std::ptr::null_mut();
+        let mut buffer = vec![0u8; 16 * 1024];
+        let error = unsafe {
+            libc::getgrnam_r(
+                c"nyanpasu".as_ptr(),
+                group.as_mut_ptr(),
+                buffer.as_mut_ptr().cast(),
+                buffer.len(),
+                &mut result,
+            )
+        };
+        if error == 0 && !result.is_null() {
+            let gid = unsafe { group.assume_init().gr_gid };
+            let root = std::path::Path::new("/var/run/nyanpasu-core");
+            match controller_access::UnixControllerAccess::prepare(root, gid) {
+                Ok(access) => {
+                    let path = root
+                        .canonicalize()
+                        .ok()
+                        .and_then(|path| camino::Utf8PathBuf::from_path_buf(path).ok());
+                    if path.is_some() {
+                        return Ok((path, Arc::new(access)));
+                    }
+                }
+                Err(error) => tracing::warn!("service core IPC is unavailable: {error}"),
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    Ok((
+        None,
+        Arc::new(controller_access::UnavailableControllerAccess),
+    ))
 }
