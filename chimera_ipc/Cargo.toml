@@ -5,7 +5,7 @@ edition = "2024"
 
 [features]
 server = ["dep:axum", "dep:axum-extra", "dep:tower", "dep:widestring"]
-client = ["dep:axum"]
+client = ["dep:axum", "dep:backon", "dep:tokio-tungstenite"]
 specta = ["dep:specta", "chimera_utils/specta"]
 
 [dependencies]
@@ -24,7 +24,7 @@ interprocess = { version = "2.3.1", features = ["tokio"] }
 hyper = { version = "1", features = ["full"] }
 http-body-util = "0.1"
 hyper-util = { version = "0.1", features = ["full"] }
-futures-util = "0.3"
+futures-util = { version = "0.3", features = ["sink"] }
 pin-project-lite = "0.2"
 tokio-util = { version = "0.7", features = ["io-util"] }
 bytes = "1"
@@ -33,8 +33,10 @@ serde_json = "1"
 indexmap = { version = "2", features = ["serde"] }
 
 axum = { version = "0.8", features = ["ws"], optional = true }
+backon = { version = "1.6", optional = true }
 axum-extra = { version = "0.12", features = ["typed-header"], optional = true }
 tower = { version = "0.5", features = ["util"], optional = true }
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["handshake"], optional = true }
 # tower-http = { version = "0.5", features = ["fs", "trace"], optional = true }
 widestring = { version = "1", optional = true }
 
