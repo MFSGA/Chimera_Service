@@ -86,10 +86,10 @@ impl std::fmt::Debug for CoreEffectiveConfig {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct CoreSubmitReq<'n> {
-    /// 32 lowercase hex characters: the idempotency identity. The same id
-    /// with the same payload attaches to the original operation; the same id
-    /// with a different payload fails with `error_kind =
-    /// "operation_conflict"`.
+    /// The core manager's `16-8-8` lowercase hexadecimal form is the
+    /// idempotency identity. The same id with the same payload attaches to the
+    /// original operation; the same id with a different payload fails with
+    /// `error_kind = "operation_conflict"`.
     pub operation_id: Cow<'n, str>,
     pub command: CoreCommandInfo<'n>,
 }
@@ -228,7 +228,7 @@ mod tests {
     #[test]
     fn a_reconcile_submit_roundtrips_with_every_optional_present() {
         let request = CoreSubmitReq {
-            operation_id: Cow::Borrowed("00112233445566778899aabbccddeeff"),
+            operation_id: Cow::Borrowed("0011223344556677-8899aabb-ccddeeff"),
             command: CoreCommandInfo::Reconcile {
                 local_ipc: None,
                 core_type: Cow::Owned(chimera_utils::core::CoreType::Clash(
@@ -253,7 +253,7 @@ mod tests {
     #[test]
     fn bare_commands_and_optionals_stay_off_the_wire() {
         let request = CoreSubmitReq {
-            operation_id: Cow::Borrowed("00112233445566778899aabbccddeeff"),
+            operation_id: Cow::Borrowed("0011223344556677-8899aabb-ccddeeff"),
             command: CoreCommandInfo::Stop,
         };
         let encoded = serde_json::to_string(&request).unwrap();
@@ -261,7 +261,7 @@ mod tests {
         assert!(!encoded.contains("expected_digest"));
 
         let query = CoreOperationReq {
-            operation_id: Cow::Borrowed("00112233445566778899aabbccddeeff"),
+            operation_id: Cow::Borrowed("0011223344556677-8899aabb-ccddeeff"),
             wait_ms: None,
         };
         assert!(!serde_json::to_string(&query).unwrap().contains("wait_ms"));
@@ -270,7 +270,7 @@ mod tests {
     #[test]
     fn operation_info_roundtrips_in_both_terminal_shapes() {
         let succeeded = OperationInfo {
-            id: "00112233445566778899aabbccddeeff".into(),
+            id: "0011223344556677-8899aabb-ccddeeff".into(),
             phase: OperationPhase::Succeeded,
             output: Some(OperationOutputInfo::Reconciled(ReconcileOutcomeInfo {
                 outcome: ReconcileOutcomeKind::Started,
@@ -293,7 +293,7 @@ mod tests {
         );
 
         let failed = OperationInfo {
-            id: "00112233445566778899aabbccddeeff".into(),
+            id: "0011223344556677-8899aabb-ccddeeff".into(),
             phase: OperationPhase::Failed,
             output: None,
             error: Some(OperationErrorInfo {
