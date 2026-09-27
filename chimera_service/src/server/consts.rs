@@ -1,5 +1,6 @@
 use std::{path::PathBuf, sync::OnceLock};
 
+#[derive(Clone)]
 pub struct RuntimeInfos {
     pub service_data_dir: PathBuf,
     pub service_config_dir: PathBuf,

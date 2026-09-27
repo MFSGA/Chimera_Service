@@ -92,7 +92,13 @@ pub async fn server_inner(
     #[cfg(windows)]
     tracing::info!(sids = ?sids_str, "Loaded acl file");
 
-    crate::server::run(token, sids_str).await?;
+    crate::server::run(
+        (*RuntimeInfos::global()).clone(),
+        chimera_core_manager::LocalIpcPolicy::Disable,
+        token,
+        sids_str,
+    )
+    .await?;
     Ok(())
 }
 

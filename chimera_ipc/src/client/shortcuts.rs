@@ -49,6 +49,22 @@ impl<'a> Client<'a> {
         Ok(())
     }
 
+    pub async fn check_config(
+        &self,
+        payload: &api::core::check::CoreCheckReq<'_>,
+    ) -> Result<'_, ()> {
+        let payload = simd_json::serde::to_string(payload)?;
+        let request = Request::post(api::core::check::CORE_CHECK_ENDPOINT)
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from(payload))?;
+        let response = send_request(&self.0, request)
+            .await?
+            .cast_body::<api::core::check::CoreCheckRes>()
+            .await?;
+        response.ok()?;
+        Ok(())
+    }
+
     pub async fn stop_core(&self) -> Result<'_, ()> {
         let request =
             Request::post(api::core::stop::CORE_STOP_ENDPOINT).body(Empty::<Bytes>::new())?;

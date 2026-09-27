@@ -25,18 +25,15 @@ ctrlc = { version = "3", features = ["termination"] }
 
 tracing-panic = "0.1"
 
-#nyanpasu-utils = { workspace = true, default-features = false, features = [
-#    "dirs",
-#    "os",
-#    "network",
-#] }
-
-# todo: add the features
 chimera_utils = { workspace = true, default-features = false, features = [
     "dirs",
     "os",
     "network",
+    "core_manager",
+    "serde",
 ] }
+chimera-core-manager = { path = "../crates/chimera-core-manager" }
+serde_yaml_ng.workspace = true
 
 chimera-ipc = { path = "../chimera_ipc", default-features = false, features = [
     "server",
@@ -85,6 +82,7 @@ camino = { version = "1.1", features = ["serde1"] }
 
 sysinfo = "0.39.0"
 chrono = { workspace = true }
+simd-json.workspace = true
 colored = "3.0.0"
 timeago = "0.6"
 ansi-str = "0.9"
@@ -99,4 +97,5 @@ windows-service = "0.8"
 windows = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
+libc = "0.2"
 whoami = "1"
