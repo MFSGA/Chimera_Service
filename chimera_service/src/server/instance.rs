@@ -59,16 +59,26 @@ impl CoreManagerService {
         let state = Self::state_(manager.as_ref()).into_owned();
         match *manager {
             Some(ref manager) => chimera_ipc::api::status::CoreInfos {
+                instance_id: None,
                 r#type: Some(manager.instance.core_type.clone()),
                 state,
                 state_changed_at,
                 config_path: Some(manager.config_path.clone().into()),
+                controller: None,
+                health: None,
+                revision: None,
+                detail: None,
             },
             None => chimera_ipc::api::status::CoreInfos {
+                instance_id: None,
                 r#type: None,
                 state,
                 state_changed_at,
                 config_path: None,
+                controller: None,
+                health: None,
+                revision: None,
+                detail: None,
             },
         }
     }
