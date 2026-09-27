@@ -36,6 +36,17 @@ pub struct R<'a, T: Serialize + DeserializeOwned + Debug> {
     pub data: Option<T>,
     #[builder(setter(skip), default = "self.default_ts()")]
     pub ts: i64,
+    /// Optional machine-readable failure classification. Kept as a string at
+    /// the IPC boundary so this crate remains independent from the app's
+    /// domain metadata crate and newer services can add kinds safely.
+    #[builder(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_kind: Option<Cow<'a, str>>,
+    /// The service's retryability decision, when it can make one. Missing is
+    /// distinct from `false` for compatibility with older service versions.
+    #[builder(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retryable: Option<bool>,
 }
 
 impl<T: Serialize + DeserializeOwned + Debug> R<'_, T> {
@@ -80,6 +91,28 @@ impl<'a, T: Serialize + DeserializeOwned + Debug> RBuilder<'a, T> {
             msg,
             data: None,
             ts: crate::utils::get_current_ts(),
+            error_kind: None,
+            retryable: None,
+        }
+    }
+
+    /// Builds an error envelope with optional structured failure metadata.
+    /// Unknown `error_kind` values remain valid wire data for forward
+    /// compatibility; consumers should preserve the raw value when they do
+    /// not recognize it.
+    pub fn other_error_with_kind(
+        msg: Cow<'a, str>,
+        error_kind: Option<Cow<'a, str>>,
+        retryable: Option<bool>,
+    ) -> R<'a, T> {
+        let code = ResponseCode::OtherError;
+        R {
+            code,
+            msg,
+            data: None,
+            ts: crate::utils::get_current_ts(),
+            error_kind,
+            retryable,
         }
     }
 
@@ -90,6 +123,56 @@ impl<'a, T: Serialize + DeserializeOwned + Debug> RBuilder<'a, T> {
             msg: Cow::Borrowed(code.msg()),
             data: Some(data),
             ts: crate::utils::get_current_ts(),
+            error_kind: None,
+            retryable: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_response_envelopes_decode_without_error_metadata() {
+        let legacy = serde_json::json!({
+            "code": "Ok",
+            "msg": "ok",
+            "data": null,
+            "ts": 12
+        });
+
+        let response: R<'_, Option<()>> = serde_json::from_value(legacy).unwrap();
+
+        assert!(response.error_kind.is_none());
+        assert!(response.retryable.is_none());
+    }
+
+    #[test]
+    fn absent_error_metadata_stays_off_success_wire() {
+        let response: R<'_, ()> = RBuilder::success(());
+
+        let encoded = serde_json::to_value(response).unwrap();
+        let object = encoded.as_object().unwrap();
+
+        assert!(!object.contains_key("error_kind"));
+        assert!(!object.contains_key("retryable"));
+    }
+
+    #[test]
+    fn classified_error_metadata_roundtrips() {
+        let response: R<'_, ()> = RBuilder::other_error_with_kind(
+            Cow::Borrowed("configuration rejected"),
+            Some(Cow::Borrowed("invalid_config")),
+            Some(false),
+        );
+
+        let encoded = serde_json::to_value(response).unwrap();
+        assert_eq!(encoded["error_kind"], "invalid_config");
+        assert_eq!(encoded["retryable"], false);
+
+        let decoded: R<'_, Option<()>> = serde_json::from_value(encoded).unwrap();
+        assert_eq!(decoded.error_kind.as_deref(), Some("invalid_config"));
+        assert_eq!(decoded.retryable, Some(false));
     }
 }
