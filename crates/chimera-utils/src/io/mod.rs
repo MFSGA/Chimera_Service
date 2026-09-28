@@ -7,9 +7,7 @@
 #[cfg(feature = "atomic_fs")]
 pub mod atomic_fs;
 
-use std::convert::Infallible;
-use std::io::BufRead;
-use std::result::Result as StdResult;
+use std::{convert::Infallible, io::BufRead, result::Result as StdResult};
 /// Read all bytes until a newline (the `0xA` byte) or a carriage return (`\r`) is reached, and append them to the provided buffer.
 ///
 /// Adapted from <https://doc.rust-lang.org/std/io/trait.BufRead.html#method.read_line>.

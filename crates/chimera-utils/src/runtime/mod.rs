@@ -2,9 +2,10 @@
 
 use std::{future::Future, sync::OnceLock};
 
-use tokio::runtime::Handle;
-use tokio::runtime::Runtime;
-use tokio::task::JoinHandle;
+use tokio::{
+    runtime::{Handle, Runtime},
+    task::JoinHandle,
+};
 pub static RUNTIME: OnceLock<Runtime> = OnceLock::new();
 
 pub fn default_runtime() -> Runtime {

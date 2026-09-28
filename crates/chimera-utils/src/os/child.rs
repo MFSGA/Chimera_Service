@@ -19,8 +19,10 @@ fn gracefully_kill(pid: u32) -> std::io::Result<()> {
 
 #[cfg(unix)]
 fn gracefully_kill(pid: u32) -> std::io::Result<()> {
-    use nix::sys::signal::{Signal, kill};
-    use nix::unistd::Pid;
+    use nix::{
+        sys::signal::{Signal, kill},
+        unistd::Pid,
+    };
     kill(Pid::from_raw(pid as i32), Signal::SIGTERM).map_err(|e| {
         std::io::Error::new(std::io::ErrorKind::Other, format!("kill failed: {:?}", e))
     })?;

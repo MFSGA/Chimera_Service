@@ -5,14 +5,12 @@ use shared_child::SharedChild;
 use tokio::{process::Command as TokioCommand, sync::mpsc::Receiver};
 use tracing_attributes::instrument;
 
-use std::borrow::Cow;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
-use std::{ffi::OsStr, process::Command as StdCommand, sync::Arc, time::Duration};
+use std::{borrow::Cow, ffi::OsStr, process::Command as StdCommand, sync::Arc, time::Duration};
 
 use super::{ClashCoreType, CommandEvent, CoreType, TerminatedPayload, utils::spawn_pipe_reader};
-use crate::os::ChildExt;
-use crate::runtime::block_on;
+use crate::{os::ChildExt, runtime::block_on};
 
 // const DETACHED_PROCESS: u32 = 0x00000008;
 #[cfg(windows)]
