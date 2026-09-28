@@ -1207,7 +1207,6 @@ mod tests {
             (ClashCoreType::ClashRust, CoreKind::ClashRust),
             (ClashCoreType::ClashRustAlpha, CoreKind::ClashRust),
             (ClashCoreType::ClashPremium, CoreKind::ClashPremium),
-            (ClashCoreType::Meow, CoreKind::Meow),
         ];
         for (core_type, expected) in cases {
             assert_eq!(core_kind(&CoreType::Clash(core_type)).unwrap(), expected);

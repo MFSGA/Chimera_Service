@@ -507,7 +507,7 @@ dependencies = [
 
 [[package]]
 name = "chimera-ipc"
-version = "1.9.0"
+version = "1.10.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -541,7 +541,7 @@ dependencies = [
 
 [[package]]
 name = "chimera-service"
-version = "1.9.0"
+version = "1.10.0"
 dependencies = [
  "ansi-str",
  "anyhow",
@@ -574,6 +574,7 @@ dependencies = [
  "simd-json",
  "supports-color",
  "sysinfo 0.39.6",
+ "tempfile",
  "thiserror 2.0.21",
  "timeago",
  "tokio",
