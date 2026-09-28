@@ -1,25 +1,124 @@
 
-## [1.9.0] - 2026-09-02 11:25:34
+## [1.10.1] - 2026-09-28 19:46:50
+
+
+### ✅ Testing
+
+- **utils:** Cover epoch pid ownership by @MFSGA 
+
+- **utils:** Cover supervisor lifecycle by @MFSGA 
+
+- **utils:** Cover managed process execution by @MFSGA 
 
 
 ### ✨ Features
 
-- **clash-api:** Add controller endpoint primitives by @MFSGA 
+- **core-manager:** Add validated manager state hub by @MFSGA 
 
-- **cli:** Backport service maintenance commands by @MFSGA 
+- **core-manager:** Track health transitions by @MFSGA 
+
+- **core-manager:** Add object-safe health probes by @MFSGA 
+
+- **core-manager:** Define launch and manager specs by @MFSGA 
+
+- **core-manager:** Define health policy by @MFSGA 
+
+- **core-manager:** Define stable manager errors by @MFSGA 
+
+- **core-manager:** Add lifecycle status snapshots by @MFSGA 
+
+- **core-manager:** Establish core capability types by @MFSGA 
+
+- **core-metadata:** Define ipc capability floors by @MFSGA 
+
+- **core-metadata:** Define core kinds and resources by @MFSGA 
+
+- **ipc:** Expose event websocket client by @MFSGA 
+
+- **ipc:** Expose structured server error details by @MFSGA 
+
+- **ipc:** Add classified error envelope fields by @MFSGA 
+
+- **ipc:** Add typed core v2 client calls by @MFSGA 
+
+- **ipc:** Add additive core control v2 types by @MFSGA 
+
+- **service:** Add CoreControl IPC v2 bridge by @MFSGA 
+
+- **utils:** Reap only verified epoch processes by @MFSGA 
+
+- **utils:** Publish epoch pid files safely by @MFSGA 
+
+- **utils:** Bind pid records to process identity by @MFSGA 
+
+- **utils:** Define epoch pid ownership records by @MFSGA 
+
+- **utils:** Implement process supervision loop by @MFSGA 
+
+- **utils:** Add supervisor policies and handle by @MFSGA 
+
+- **utils:** Implement managed process execution by @MFSGA 
+
+- **utils:** Add managed process handles by @MFSGA 
+
+- **utils:** Add process command contracts by @MFSGA 
 
 
 ### 🐛 Bug Fixes
 
-- **deps:** Update rust crate tower-http to 0.7 (#25) by @MFSGA  in [#25](https://github.com/MFSGA/Chimera_Service/pull/25)
+- **deps:** Update rust crate sysinfo to 0.39 (#61) by @MFSGA  in [#61](https://github.com/MFSGA/Chimera_Service/pull/61)
 
-- **deps:** Update rust crate sysinfo to 0.39.0 (#24) by @MFSGA  in [#24](https://github.com/MFSGA/Chimera_Service/pull/24)
+- **ipc:** Match core manager operation id format by @MFSGA 
+
+
+### 📚 Documentation
+
+- Describe Chimera proxy server by @MFSGA 
+
+
+### 🧹 Miscellaneous Tasks
+
+- **deps:** Update rust crate hyper-util to v0.1.21 (#75) by @MFSGA  in [#75](https://github.com/MFSGA/Chimera_Service/pull/75)
+
+- **deps:** Update renovatebot/github-action action to v46.3.4 (#76) by @MFSGA  in [#76](https://github.com/MFSGA/Chimera_Service/pull/76)
+
+- **deps:** Update rust crate encoding_rs to v0.8.42 (#74) by @MFSGA  in [#74](https://github.com/MFSGA/Chimera_Service/pull/74)
+
+- **deps:** Update rust crate thiserror to v2.0.21 (#73) by @MFSGA  in [#73](https://github.com/MFSGA/Chimera_Service/pull/73)
+
+- **deps:** Update renovatebot/github-action action to v46.3.3 (#72) by @MFSGA  in [#72](https://github.com/MFSGA/Chimera_Service/pull/72)
+
+- **deps:** Update rust crate clap_complete to v4.6.11 (#70) by @MFSGA  in [#70](https://github.com/MFSGA/Chimera_Service/pull/70)
+
+- **deps:** Update rust crate clap to v4.6.7 (#69) by @MFSGA  in [#69](https://github.com/MFSGA/Chimera_Service/pull/69)
+
+- **deps:** Update rust crate camino to v1.2.6 (#71) by @MFSGA  in [#71](https://github.com/MFSGA/Chimera_Service/pull/71)
+
+- **deps:** Update renovatebot/github-action action to v46.3.1 (#68) by @MFSGA  in [#68](https://github.com/MFSGA/Chimera_Service/pull/68)
+
+- **deps:** Update renovatebot/github-action action to v46.3.0 (#67) by @MFSGA  in [#67](https://github.com/MFSGA/Chimera_Service/pull/67)
+
+- **deps:** Update rust crate encoding_rs to v0.8.41 (#66) by @MFSGA  in [#66](https://github.com/MFSGA/Chimera_Service/pull/66)
+
+- **deps:** Update cargo-bins/cargo-binstall action to v1.23.0 (#64) by @MFSGA  in [#64](https://github.com/MFSGA/Chimera_Service/pull/64)
+
+- **deps:** Update renovatebot/github-action action to v46.2.6 (#65) by @MFSGA  in [#65](https://github.com/MFSGA/Chimera_Service/pull/65)
+
+- **deps:** Update rust crate interprocess to v2.4.4 (#62) by @MFSGA  in [#62](https://github.com/MFSGA/Chimera_Service/pull/62)
+
+- **deps:** Update rust crate indexmap to v2.14.2 (#63) by @MFSGA  in [#63](https://github.com/MFSGA/Chimera_Service/pull/63)
+
+- **deps:** Update rust crate tower-http to v0.7.1 (#60) by @MFSGA  in [#60](https://github.com/MFSGA/Chimera_Service/pull/60)
+
+- **rustfmt:** Normalize core foundation by @MFSGA 
+
+- Prepare service v1.10.1 release by MFSGA
 
 -----------------
 
 
 
-**Full Changelog**: https://github.com/MFSGA/Chimera_Service/compare/v1.8.1...v1.9.0
+**Full Changelog**: https://github.com/MFSGA/Chimera_Service/compare/v1.9.0...v1.10.1
 
 
 
