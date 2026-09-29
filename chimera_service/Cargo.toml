@@ -91,6 +91,9 @@ ansi-str = "0.9"
 chrono = { workspace = true }
 rustc_version = "0.4"
 
+[dev-dependencies]
+tempfile = "3"
+
 [target.'cfg(windows)'.dependencies]
 check_elevation = "0.2.4"
 windows-service = "0.8"

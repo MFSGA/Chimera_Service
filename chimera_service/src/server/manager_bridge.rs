@@ -46,11 +46,39 @@ const MAX_CONCURRENT_CHECKS: usize = 2;
 /// middleware's 120s liveness bound.
 const MAX_OPERATION_WAIT_MS: u64 = 90_000;
 
-/// Upper bound on the executor-first shutdown: the transaction already in
-/// flight has to finish before the queued `Shutdown` can run. Exceeding it is
-/// reported, never waited out — a leaked core is collected by the next
-/// construction's orphan sweep, a hung daemon exit is not collected by anything.
+/// Upper bound for the executor-first shutdown request. If it expires, the
+/// service waits for the executor transaction to finish and retries through
+/// the manager directly before allowing service teardown. This keeps a core
+/// with an owned DNS override alive when the host resolver cannot be restored.
 const CORE_SHUTDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
+
+const DNS_SAFE_SHUTDOWN_RETRY_INITIAL: std::time::Duration = std::time::Duration::from_secs(1);
+const DNS_SAFE_SHUTDOWN_RETRY_MAX: std::time::Duration = std::time::Duration::from_secs(30);
+
+async fn retry_until_success<F, Fut, E>(mut operation: F)
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<(), E>>,
+    E: std::fmt::Display,
+{
+    let mut retry_delay = DNS_SAFE_SHUTDOWN_RETRY_INITIAL;
+    loop {
+        match operation().await {
+            Ok(()) => return,
+            Err(error) => {
+                tracing::error!(
+                    error = %error,
+                    retry_in = ?retry_delay,
+                    "runtime shutdown did not complete; keeping the core and service alive"
+                );
+                tokio::time::sleep(retry_delay).await;
+                retry_delay = retry_delay
+                    .saturating_mul(2)
+                    .min(DNS_SAFE_SHUTDOWN_RETRY_MAX);
+            }
+        }
+    }
+}
 
 /// Legacy wire strings the GUI branches on. These are protocol, not
 /// diagnostics: changing any of them is a breaking change to clash-nyanpasu.
@@ -218,10 +246,14 @@ impl CoreManagerService {
             runtime_dir: Some(dirs.runtime),
             local_ipc_policy,
             ..ManagerOptions::default()
-        })
-        .controller_access(access)
-        .build()
-        .await?;
+        });
+        #[cfg(target_os = "macos")]
+        let manager = manager.dns_controller(Arc::new(
+            chimera_core_manager::dns::macos::MacosDnsController::new(
+                "State:/Network/Service/chimera-dns/DNS".into(),
+            ),
+        ));
+        let manager = manager.controller_access(access).build().await?;
         let core_control =
             CoreControl::spawn(manager.clone(), ControlOptions::new(source_dir, dirs.data));
         Ok(Self {
@@ -285,25 +317,37 @@ impl CoreManagerService {
         control.closing = true;
         drop(control);
 
-        match tokio::time::timeout(CORE_SHUTDOWN_TIMEOUT, self.inner.control.shutdown()).await {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) if self.inner.control.executor_is_closed() => {
-                // Not a bypass: with the executor gone there is no transaction
-                // owner left, and the manager is the only remaining way to stop
-                // a core this process still owns.
-                tracing::error!(
-                    "the control executor is gone ({error}); stopping the core directly"
-                );
-                if let Err(error) = self.inner.manager.shutdown().await {
-                    tracing::error!("failed to stop the core on shutdown: {error}");
+        loop {
+            match tokio::time::timeout(CORE_SHUTDOWN_TIMEOUT, self.inner.control.shutdown()).await {
+                Ok(Ok(())) => return,
+                Ok(Err(error)) => {
+                    tracing::error!("control-plane shutdown failed: {error}");
+                    if self.inner.control.executor_is_closed() {
+                        break;
+                    }
+                    // Admission can fail before a shutdown command reaches the
+                    // executor. Keep the service alive and retry that path.
+                    tokio::time::sleep(DNS_SAFE_SHUTDOWN_RETRY_INITIAL).await;
+                }
+                Err(_) => {
+                    tracing::error!(
+                        "control-plane shutdown exceeded {CORE_SHUTDOWN_TIMEOUT:?}; \
+                         waiting for its transaction before service teardown"
+                    );
+                    let exit = self.inner.control.until_closed().await;
+                    tracing::error!(
+                        "control executor exited after a timed-out shutdown request: {exit:?}"
+                    );
+                    break;
                 }
             }
-            Ok(Err(error)) => tracing::error!("failed to stop the core on shutdown: {error}"),
-            Err(_) => tracing::error!(
-                "the core did not shut down within {CORE_SHUTDOWN_TIMEOUT:?}; \
-                 leaving it to the next orphan sweep"
-            ),
         }
+
+        // A failed manager shutdown can mean the owned host DNS override could
+        // not be restored. Do not tear down this service (and potentially its
+        // TUN/core) while that state is uncertain. The durable ownership record
+        // lets each retry safely resume from the last verified state.
+        retry_until_success(|| self.inner.manager.shutdown()).await;
     }
 
     /// Resolves when the v2 control executor exits, so the daemon can refuse to
@@ -1093,6 +1137,22 @@ mod tests {
     use tokio::sync::watch;
 
     use super::*;
+
+    #[tokio::test]
+    async fn shutdown_retry_keeps_retrying_after_a_transient_failure() {
+        let attempts = std::sync::atomic::AtomicUsize::new(0);
+        retry_until_success(|| async {
+            let attempt = attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if attempt == 0 {
+                Err(std::io::Error::other("DNS restore failed"))
+            } else {
+                Ok(())
+            }
+        })
+        .await;
+
+        assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
 
     fn simulate(states: &[ManagerCoreState]) -> Vec<String> {
         let mut last = CoreState::Stopped(None);
