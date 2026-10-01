@@ -2297,7 +2297,7 @@ name = "os-utils"
 version = "0.1.0"
 source = "git+https://github.com/MFSGA/Chimera_Utils.git#0ed55a482ee67bdca06af6526382111b64fa6473"
 dependencies = [
- "nix 0.27.1",
+ "nix 0.31.3",
  "shared_child",
  "windows 0.61.3",
 ]
@@ -3134,14 +3134,15 @@ dependencies = [
 
 [[package]]
 name = "service-manager"
-version = "0.8.0"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2cae942acfe9cecd4450998408f52e1c1ee083145226b7b803bd0d82e1c86912"
+checksum = "b9ff6975a4ea07dda326cf122fcc1b5cf6266daad42d1442a666a99fe50f0de9"
 dependencies = [
  "cfg-if",
  "dirs 4.0.0",
  "encoding-utils",
  "encoding_rs",
+ "log",
  "plist",
  "which",
  "xml-rs",
@@ -3438,7 +3439,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0136791f7c95b1f6dd99f9cc786b91bb81c3800b639b3478e561ddb7be95e5f1"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.3",
  "windows-sys 0.61.2",
