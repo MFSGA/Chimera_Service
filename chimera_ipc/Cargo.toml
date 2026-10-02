@@ -36,7 +36,7 @@ axum = { version = "0.8", features = ["ws"], optional = true }
 backon = { version = "1.6", optional = true }
 axum-extra = { version = "0.12", features = ["typed-header"], optional = true }
 tower = { version = "0.5", features = ["util"], optional = true }
-tokio-tungstenite = { version = "0.29", default-features = false, features = ["handshake"], optional = true }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"], optional = true }
 # tower-http = { version = "0.5", features = ["fs", "trace"], optional = true }
 widestring = { version = "1", optional = true }
 
