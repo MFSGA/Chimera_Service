@@ -438,18 +438,18 @@ impl CoreManager {
 #[cfg(test)]
 mod tests {
     use std::sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     };
 
     use super::*;
     use crate::{
+        Epoch,
         capability::{Feature, RuntimeFeature},
         kind::CoreKind,
         runtime::{BoxFuture, RuntimeBackend, RuntimeInstance, RuntimeLaunchRequest},
         spec::{CoreSpec, InstanceOptions, InstanceSpec, ManagerOptions, ResolvedController},
         state::ConfigRevision,
-        Epoch,
     };
     use camino::Utf8Path;
     use enumset::EnumSet;

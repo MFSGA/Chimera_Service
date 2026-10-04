@@ -16,7 +16,7 @@
 use serde::{Deserialize, Serialize};
 use serde_yaml_ng::Mapping;
 
-use crate::{runtime::BoxFuture, Epoch};
+use crate::{Epoch, runtime::BoxFuture};
 
 /// The override one host should hold while a given effective config runs.
 #[derive(Debug, Clone, PartialEq, Eq)]
