@@ -40,7 +40,8 @@ fn core_command_args(
             CoreType::Clash(
                 ClashCoreType::ClashRust
                 | ClashCoreType::ClashRustAlpha
-                | ClashCoreType::ChimeraClient,
+                | ClashCoreType::ChimeraClient
+                | ClashCoreType::ChimeraClientAlpha,
             ) => "-c",
             CoreType::SingBox => unimplemented!("SingBox is not supported yet"),
             _ => "-f",
@@ -220,6 +221,7 @@ impl CoreInstance {
                     ClashCoreType::ClashRust
                         | ClashCoreType::ClashRustAlpha
                         | ClashCoreType::ChimeraClient
+                        | ClashCoreType::ChimeraClientAlpha
                 )
             ) {
                 super::utils::parse_check_output(
@@ -466,19 +468,30 @@ mod tests {
 
     #[test]
     fn chimera_client_uses_clash_rs_flags_and_keeps_its_core_type() {
-        let core_type = CoreType::Clash(ClashCoreType::ChimeraClient);
         let app_dir = Utf8Path::new("/chimera/data");
         let config = Utf8Path::new("/chimera/config.yaml");
 
+        for core_type in [
+            CoreType::Clash(ClashCoreType::ChimeraClient),
+            CoreType::Clash(ClashCoreType::ChimeraClientAlpha),
+        ] {
+            assert_eq!(
+                strings(&core_command_args(&core_type, app_dir, config, true)),
+                ["-d", "/chimera/data", "-c", "/chimera/config.yaml"]
+            );
+            assert_eq!(
+                strings(&core_config_check_args(&core_type, app_dir, config)),
+                ["-t", "-d", "/chimera/data", "-c", "/chimera/config.yaml"]
+            );
+        }
         assert_eq!(
-            strings(&core_command_args(&core_type, app_dir, config, true)),
-            ["-d", "/chimera/data", "-c", "/chimera/config.yaml"]
+            CoreType::Clash(ClashCoreType::ChimeraClient).as_ref(),
+            "chimera_client"
         );
         assert_eq!(
-            strings(&core_config_check_args(&core_type, app_dir, config)),
-            ["-t", "-d", "/chimera/data", "-c", "/chimera/config.yaml"]
+            CoreType::Clash(ClashCoreType::ChimeraClientAlpha).as_ref(),
+            "chimera_client_alpha"
         );
-        assert_eq!(core_type.as_ref(), "chimera_client");
     }
 
     #[test]

@@ -226,6 +226,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn chimera_client_channels_keep_distinct_wire_and_executable_identities() {
+        use chimera_utils::core::{ClashCoreType, CoreType};
+
+        let stable = CoreType::Clash(ClashCoreType::ChimeraClient);
+        let alpha = CoreType::Clash(ClashCoreType::ChimeraClientAlpha);
+
+        assert_eq!(
+            serde_json::to_string(&stable).unwrap(),
+            r#"{"clash":"chimera_client"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&alpha).unwrap(),
+            r#"{"clash":"chimera_client_alpha"}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<CoreType>(r#"{"clash":"chimera_client_alpha"}"#).unwrap(),
+            alpha
+        );
+        assert_eq!(alpha.get_executable_name(), "chimera-client-alpha");
+    }
+
+    #[test]
     fn a_reconcile_submit_roundtrips_with_every_optional_present() {
         let request = CoreSubmitReq {
             operation_id: Cow::Borrowed("0011223344556677-8899aabb-ccddeeff"),

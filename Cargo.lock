@@ -638,7 +638,7 @@ dependencies = [
 [[package]]
 name = "chimera_utils"
 version = "0.1.0"
-source = "git+https://github.com/MFSGA/Chimera_Utils.git#0ed55a482ee67bdca06af6526382111b64fa6473"
+source = "git+https://github.com/MFSGA/Chimera_Utils.git#d1884e1bfed2cdfb3f9ecfc8451326248a3cadf8"
 dependencies = [
  "camino",
  "constcat",
@@ -1111,7 +1111,7 @@ dependencies = [
 [[package]]
 name = "dirs-utils"
 version = "0.1.0"
-source = "git+https://github.com/MFSGA/Chimera_Utils.git#0ed55a482ee67bdca06af6526382111b64fa6473"
+source = "git+https://github.com/MFSGA/Chimera_Utils.git#d1884e1bfed2cdfb3f9ecfc8451326248a3cadf8"
 dependencies = [
  "dirs 6.0.0",
  "thiserror 2.0.21",
@@ -2089,7 +2089,7 @@ checksum = "743fb55ba31b18fb1ecef6bdc9aa2743314978ac084044301a7eee33fb99a20d"
 [[package]]
 name = "network-utils"
 version = "0.1.0"
-source = "git+https://github.com/MFSGA/Chimera_Utils.git#0ed55a482ee67bdca06af6526382111b64fa6473"
+source = "git+https://github.com/MFSGA/Chimera_Utils.git#d1884e1bfed2cdfb3f9ecfc8451326248a3cadf8"
 dependencies = [
  "log",
  "tempfile",
@@ -2295,7 +2295,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 [[package]]
 name = "os-utils"
 version = "0.1.0"
-source = "git+https://github.com/MFSGA/Chimera_Utils.git#0ed55a482ee67bdca06af6526382111b64fa6473"
+source = "git+https://github.com/MFSGA/Chimera_Utils.git#d1884e1bfed2cdfb3f9ecfc8451326248a3cadf8"
 dependencies = [
  "nix 0.27.1",
  "shared_child",

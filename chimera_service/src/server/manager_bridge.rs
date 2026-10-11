@@ -783,7 +783,9 @@ fn core_kind(core_type: &CoreType) -> Result<CoreKind, anyhow::Error> {
         CoreType::Clash(ClashCoreType::ClashRust | ClashCoreType::ClashRustAlpha) => {
             Ok(CoreKind::ClashRust)
         }
-        CoreType::Clash(ClashCoreType::ChimeraClient) => Ok(CoreKind::ChimeraClient),
+        CoreType::Clash(ClashCoreType::ChimeraClient | ClashCoreType::ChimeraClientAlpha) => {
+            Ok(CoreKind::ChimeraClient)
+        }
         CoreType::Clash(ClashCoreType::ClashPremium) => Ok(CoreKind::ClashPremium),
         CoreType::SingBox => anyhow::bail!("sing-box is not a supported core"),
     }
@@ -795,8 +797,15 @@ mod chimera_kind_tests {
 
     #[test]
     fn chimera_client_keeps_its_manager_kind() {
-        let core = CoreType::Clash(ClashCoreType::ChimeraClient);
-        assert_eq!(core_kind(&core).unwrap(), CoreKind::ChimeraClient);
+        for core in [
+            ClashCoreType::ChimeraClient,
+            ClashCoreType::ChimeraClientAlpha,
+        ] {
+            assert_eq!(
+                core_kind(&CoreType::Clash(core)).unwrap(),
+                CoreKind::ChimeraClient
+            );
+        }
     }
 }
 
@@ -1267,6 +1276,8 @@ mod tests {
             (ClashCoreType::ClashRust, CoreKind::ClashRust),
             (ClashCoreType::ClashRustAlpha, CoreKind::ClashRust),
             (ClashCoreType::ClashPremium, CoreKind::ClashPremium),
+            (ClashCoreType::ChimeraClient, CoreKind::ChimeraClient),
+            (ClashCoreType::ChimeraClientAlpha, CoreKind::ChimeraClient),
         ];
         for (core_type, expected) in cases {
             assert_eq!(core_kind(&CoreType::Clash(core_type)).unwrap(), expected);
@@ -1700,6 +1711,24 @@ mod tests {
         }
     }
 
+    #[test]
+    fn service_resolves_the_alpha_sidecar_while_sharing_the_chimera_manager_kind() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let infos = test_infos(root.path());
+        std::fs::create_dir_all(&infos.nyanpasu_app_dir).unwrap();
+        let stable = infos.nyanpasu_app_dir.join("chimera-client");
+        let alpha = infos.nyanpasu_app_dir.join("chimera-client-alpha");
+        std::fs::write(&stable, b"").unwrap();
+        std::fs::write(&alpha, b"").unwrap();
+
+        let stable_type = CoreType::Clash(ClashCoreType::ChimeraClient);
+        let alpha_type = CoreType::Clash(ClashCoreType::ChimeraClientAlpha);
+
+        assert_eq!(core_kind(&alpha_type).unwrap(), CoreKind::ChimeraClient);
+        assert_eq!(find_binary_path(&infos, &stable_type).unwrap(), stable);
+        assert_eq!(find_binary_path(&infos, &alpha_type).unwrap(), alpha);
+    }
+
     /// The review finding, pinned: committing the echo has to reach a client
     /// that is already connected. The manager publishes nothing when the
     /// adapter's wire-type echo moves, so before this the frames from a
@@ -1997,7 +2026,7 @@ mod tests {
                 epoch: epoch(3),
                 attempt: 2,
             }),
-            Some(CoreType::Clash(ClashCoreType::MihomoAlpha)),
+            Some(CoreType::Clash(ClashCoreType::ChimeraClientAlpha)),
         );
         assert!(matches!(infos.state, CoreState::Stopped(None)));
         assert_eq!(
@@ -2009,7 +2038,7 @@ mod tests {
         );
         assert_eq!(
             infos.r#type,
-            Some(CoreType::Clash(ClashCoreType::MihomoAlpha))
+            Some(CoreType::Clash(ClashCoreType::ChimeraClientAlpha))
         );
         assert_eq!(infos.state_changed_at, 42);
         assert!(infos.controller.is_none());
