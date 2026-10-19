@@ -196,10 +196,18 @@ struct EpochPlan {
     capabilities: EnumSet<Feature>,
     runtime_features: EnumSet<RuntimeFeature>,
     source_document: Mapping,
-    effective_document: Mapping,
+    effective_document: Arc<Mapping>,
 }
 
 impl EpochPlan {
+    fn effective_config_snapshot(&self, instance_id: uuid::Uuid) -> crate::EffectiveConfigSnapshot {
+        crate::EffectiveConfigSnapshot {
+            instance_id,
+            revision: self.revision.clone(),
+            config: Arc::clone(&self.effective_document),
+        }
+    }
+
     fn classification_view(&self) -> mihomo::ConfigClassificationView<'_> {
         mihomo::ConfigClassificationView {
             source: &self.source_document,
@@ -602,11 +610,7 @@ impl CoreManager {
         if !matches!(instance.state, crate::InstanceState::Running { .. }) {
             return None;
         }
-        Some(crate::EffectiveConfigSnapshot {
-            instance_id: instance.instance_id?,
-            revision: active.plan.revision.clone(),
-            config: Arc::new(active.plan.effective_document.clone()),
-        })
+        Some(active.plan.effective_config_snapshot(instance.instance_id?))
     }
 
     pub async fn check_config(&self, spec: &InstanceSpec) -> Result<(), Error> {
@@ -843,8 +847,19 @@ fn spawn_forwarder(
 
 #[cfg(test)]
 mod tests {
-    use super::EpochAllocator;
-    use crate::epoch::epoch;
+    use std::sync::Arc;
+
+    use super::{EpochAllocator, EpochPlan};
+    use crate::{
+        Feature, RuntimeFeature,
+        epoch::epoch,
+        kind::CoreKind,
+        spec::{CoreSpec, InstanceOptions, InstanceSpec, ResolvedController},
+        state::ConfigRevision,
+    };
+    use camino::Utf8PathBuf;
+    use enumset::EnumSet;
+    use serde_yaml_ng::Mapping;
 
     #[test]
     fn epochs_are_monotone_past_the_seed_and_never_zero() {
@@ -858,5 +873,47 @@ mod tests {
     #[should_panic(expected = "epoch space exhausted")]
     fn epoch_exhaustion_is_an_invariant_violation_not_a_wrap() {
         EpochAllocator::seeded(u64::MAX).next();
+    }
+
+    #[test]
+    fn effective_config_snapshots_share_the_committed_document() {
+        let spec = InstanceSpec {
+            core: CoreSpec {
+                kind: CoreKind::Mihomo,
+                binary_path: Utf8PathBuf::new(),
+                version: None,
+                features: Vec::new(),
+            },
+            config_path: Utf8PathBuf::new(),
+            working_dir: Utf8PathBuf::new(),
+            pid_file: None,
+            options: InstanceOptions::default(),
+        };
+        let plan = EpochPlan {
+            source_spec: spec.clone(),
+            effective_spec: spec,
+            controller: ResolvedController {
+                host: crate::Host::url("http://127.0.0.1:9090").unwrap(),
+                secret: None,
+            },
+            revision: ConfigRevision {
+                epoch: epoch(1),
+                generation: 1,
+                source_hash: "source".into(),
+                effective_hash: "effective".into(),
+                runtime_path: Utf8PathBuf::new(),
+            },
+            capabilities: EnumSet::<Feature>::new(),
+            runtime_features: EnumSet::<RuntimeFeature>::new(),
+            source_document: Mapping::new(),
+            effective_document: Arc::new(Mapping::new()),
+        };
+
+        let queried = plan.effective_config_snapshot(uuid::Uuid::nil());
+        let published = plan.effective_config_snapshot(uuid::Uuid::nil());
+
+        assert!(Arc::ptr_eq(&queried.config, &published.config));
+        assert!(Arc::ptr_eq(&plan.effective_document, &queried.config));
+        assert_eq!(queried.revision, published.revision);
     }
 }

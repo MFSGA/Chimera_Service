@@ -45,11 +45,7 @@ impl Inner {
             && let Some(instance_id) = snapshot.instance_id
         {
             self.config_commits
-                .send_replace(Some(crate::EffectiveConfigSnapshot {
-                    instance_id,
-                    revision: plan.revision.clone(),
-                    config: std::sync::Arc::new(plan.effective_document.clone()),
-                }));
+                .send_replace(Some(plan.effective_config_snapshot(instance_id)));
         }
         let health = snapshot.health;
         self.status_tx.send_modify(|status| {
