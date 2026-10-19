@@ -547,7 +547,7 @@ mod tests {
             capabilities: EnumSet::<Feature>::empty(),
             runtime_features: EnumSet::<RuntimeFeature>::empty(),
             source_document: serde_yaml_ng::Mapping::new(),
-            effective_document,
+            effective_document: Arc::new(effective_document),
         }
     }
 
