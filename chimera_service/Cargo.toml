@@ -95,7 +95,7 @@ rustc_version = "0.4"
 tempfile = "3"
 
 [target.'cfg(windows)'.dependencies]
-check_elevation = "0.2.4"
+check_elevation = "0.3.0"
 windows-service = "0.8"
 windows = { workspace = true }
 
