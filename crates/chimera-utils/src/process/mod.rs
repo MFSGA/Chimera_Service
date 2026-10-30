@@ -42,6 +42,8 @@ mod event;
 mod handle;
 mod pid_file;
 mod supervisor;
+#[cfg(windows)]
+mod windows_shutdown;
 
 pub use command::Command;
 pub use error::{ProcessError, ProcessOutput};
@@ -55,3 +57,5 @@ pub use supervisor::{
     Backoff, BackoffRange, ReadinessProbe, RestartPolicy, RestartStormPolicy, Supervisor,
     SupervisorBuilder, SupervisorEvent,
 };
+#[cfg(windows)]
+pub use windows_shutdown::windows_shutdown_helper_entry;

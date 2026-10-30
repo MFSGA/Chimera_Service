@@ -147,6 +147,8 @@ pub struct ManagerOptions {
     /// How many core-log files to keep, the active one included. With
     /// `log_max_bytes` this is the directory's hard disk budget.
     pub log_max_files: usize,
+    /// Executable entry point for the Windows console shutdown helper.
+    pub windows_shutdown_helper: Option<std::path::PathBuf>,
 }
 
 impl Default for ManagerOptions {
@@ -171,6 +173,7 @@ impl Default for ManagerOptions {
             // size. At roughly 300-600 B per record a file covers 7k-14k lines.
             log_max_bytes: 4 * 1024 * 1024,
             log_max_files: 5,
+            windows_shutdown_helper: None,
         }
     }
 }

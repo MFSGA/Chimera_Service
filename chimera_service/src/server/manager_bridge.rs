@@ -245,6 +245,8 @@ impl CoreManagerService {
             controller_template: Some(format!(r"\\.\pipe\nyanpasu-service-{namespace}-{{epoch}}")),
             runtime_dir: Some(dirs.runtime),
             local_ipc_policy,
+            #[cfg(windows)]
+            windows_shutdown_helper: Some(std::env::current_exe()?),
             ..ManagerOptions::default()
         });
         #[cfg(target_os = "macos")]

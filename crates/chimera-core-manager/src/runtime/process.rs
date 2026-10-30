@@ -30,13 +30,19 @@ pub(crate) struct ProbePlan {
 pub(crate) struct ProcessRuntimeBackend {
     probes: ProbePlan,
     cancel_token: CancellationToken,
+    windows_shutdown_helper: Option<std::path::PathBuf>,
 }
 
 impl ProcessRuntimeBackend {
-    pub(crate) fn new(probes: ProbePlan, cancel_token: CancellationToken) -> Self {
+    pub(crate) fn new(
+        probes: ProbePlan,
+        cancel_token: CancellationToken,
+        windows_shutdown_helper: Option<std::path::PathBuf>,
+    ) -> Self {
         Self {
             probes,
             cancel_token,
+            windows_shutdown_helper,
         }
     }
 }
@@ -77,7 +83,8 @@ impl RuntimeBackend for ProcessRuntimeBackend {
                 self.cancel_token.clone(),
             )
             .log_sender(log_tx)
-            .pipe_security_descriptor(descriptor);
+            .pipe_security_descriptor(descriptor)
+            .windows_shutdown_helper(self.windows_shutdown_helper.clone());
             if let Some(access) = &self.probes.controller_access {
                 let readiness = match self.probes.readiness.clone() {
                     Some(probe) => probe,

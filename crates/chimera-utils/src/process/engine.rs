@@ -23,7 +23,7 @@ pub(crate) struct SpawnParts {
 
 struct PumpParts {
     run: processkit::RunningProcess,
-    events: processkit::OutputEvents,
+    events: processkit::ProcessEvents,
     group: Arc<processkit::ProcessGroup>,
     stdin_tx: Option<mpsc::Sender<StdinWrite>>,
     kill_grace: Duration,
@@ -32,9 +32,17 @@ struct PumpParts {
     ctrl_rx: mpsc::Receiver<Ctrl>,
     term_tx: watch::Sender<Option<Result<TerminatedPayload, String>>>,
     pid_guard: Option<PidFileGuard>,
+    #[cfg(windows)]
+    shutdown: Option<super::windows_shutdown::Shutdown>,
 }
 
-fn build_pk(cmd: &Command, include_timeout: bool) -> processkit::Command {
+fn build_pk(
+    cmd: &Command,
+    include_timeout: bool,
+    graceful_windows_shutdown: bool,
+) -> processkit::Command {
+    #[cfg(not(windows))]
+    let _ = graceful_windows_shutdown;
     let mut pk = processkit::Command::new(&cmd.program).args(&cmd.args);
     for (key, value) in &cmd.envs {
         pk = pk.env(key, value);
@@ -49,7 +57,9 @@ fn build_pk(cmd: &Command, include_timeout: bool) -> processkit::Command {
         pk = pk.timeout(timeout);
     }
     #[cfg(windows)]
-    if cmd.hide_window {
+    if graceful_windows_shutdown {
+        pk = pk.windows_graceful_ctrl_break();
+    } else if cmd.hide_window {
         pk = pk.create_no_window();
     }
     pk = pk.output_buffer(processkit::OutputBufferPolicy::unbounded().with_max_bytes(256 * 1024));
@@ -62,17 +72,15 @@ fn build_pk(cmd: &Command, include_timeout: bool) -> processkit::Command {
 pub(crate) async fn run_capture(cmd: Command) -> Result<super::error::ProcessOutput, ProcessError> {
     let program = cmd.program.to_string_lossy().into_owned();
     let timeout = cmd.timeout;
-    let result = build_pk(&cmd, true)
+    let result = build_pk(&cmd, true, false)
         .output_string()
         .await
-        .map_err(|error| match error {
-            processkit::Error::Spawn { .. } | processkit::Error::NotFound { .. } => {
-                ProcessError::Spawn {
-                    program,
-                    message: error.to_string(),
-                }
-            }
-            error => ProcessError::Engine(error.to_string()),
+        .map_err(|error| match error.kind() {
+            processkit::ErrorKind::Spawn | processkit::ErrorKind::NotFound => ProcessError::Spawn {
+                program,
+                message: error.to_string(),
+            },
+            _ => ProcessError::Engine(error.to_string()),
         })?;
 
     if result.timed_out() {
@@ -177,14 +185,18 @@ async fn write_stdin(
 
 fn handle_ctrl(
     ctrl: Ctrl,
-    group: &processkit::ProcessGroup,
+    group: &Arc<processkit::ProcessGroup>,
     stdin_tx: &Option<mpsc::Sender<StdinWrite>>,
     kill_grace: Duration,
     hard_kill_at: &mut Option<tokio::time::Instant>,
+    #[cfg(windows)] shutdown: &mut Option<super::windows_shutdown::Shutdown>,
+    #[cfg(windows)] shutdown_helper: &mut Option<tokio::process::Child>,
 ) -> bool {
     match ctrl {
         Ctrl::Kill(reply) => {
             *hard_kill_at = None;
+            #[cfg(windows)]
+            stop_shutdown_helper_now(shutdown_helper);
             let result = group
                 .kill_all()
                 .map_err(|error| ProcessError::Engine(error.to_string()));
@@ -207,9 +219,30 @@ fn handle_ctrl(
             };
 
             #[cfg(windows)]
-            let result = {
-                let _ = kill_grace;
-                *hard_kill_at = None;
+            let result = if let Some(shutdown) = shutdown {
+                let deadline = tokio::time::Instant::now() + kill_grace;
+                let deadline = hard_kill_at.map_or(deadline, |existing| existing.min(deadline));
+                *hard_kill_at = Some(deadline);
+                if let Some(mut command) = shutdown.request() {
+                    match command.spawn() {
+                        Ok(child) => {
+                            *shutdown_helper = Some(child);
+                            Ok(())
+                        }
+                        Err(error) => {
+                            tracing::warn!(%error, "console shutdown helper failed to start");
+                            *hard_kill_at = None;
+                            group
+                                .kill_all()
+                                .map_err(|error| ProcessError::Engine(error.to_string()))
+                        }
+                    }
+                } else {
+                    Ok(())
+                }
+            } else {
+                #[cfg(windows)]
+                stop_shutdown_helper_now(shutdown_helper);
                 group
                     .kill_all()
                     .map_err(|error| ProcessError::Engine(error.to_string()))
@@ -232,12 +265,51 @@ fn handle_ctrl(
     }
 }
 
+#[cfg(windows)]
+fn stop_shutdown_helper_now(helper: &mut Option<tokio::process::Child>) {
+    if let Some(child) = helper.as_mut() {
+        let _ = child.start_kill();
+    }
+}
+
+#[cfg(windows)]
+async fn stop_shutdown_helper(helper: &mut Option<tokio::process::Child>) {
+    if let Some(mut child) = helper.take() {
+        let _ = child.start_kill();
+        let _ = child.wait().await;
+    }
+}
+
+fn check_shutdown_helper(helper: &mut Option<tokio::process::Child>) -> Option<String> {
+    let child = helper.as_mut()?;
+    match child.try_wait() {
+        Ok(None) => None,
+        Ok(Some(status)) if status.success() => {
+            *helper = None;
+            None
+        }
+        Ok(Some(status)) => {
+            *helper = None;
+            Some(format!("helper exited with {status}"))
+        }
+        Err(error) => {
+            *helper = None;
+            Some(error.to_string())
+        }
+    }
+}
+
 pub(crate) async fn spawn(cmd: Command) -> Result<SpawnParts, ProcessError> {
     let program = cmd.program.to_string_lossy().into_owned();
     let capacity = cmd.event_channel_capacity;
     let kill_grace = cmd.kill_grace;
     let pipe_stdin = cmd.pipe_stdin;
     let timeout = cmd.timeout;
+    #[cfg(windows)]
+    let shutdown_helper = cmd
+        .windows_shutdown_helper
+        .clone()
+        .filter(|_| super::windows_shutdown::prepare_shutdown_console());
     let epoch_pid_required = matches!(&cmd.pid_file, Some(PidFile::Epoch(_)));
     let expected_exe = std::path::Path::new(&cmd.program)
         .file_name()
@@ -262,7 +334,16 @@ pub(crate) async fn spawn(cmd: Command) -> Result<SpawnParts, ProcessError> {
     // A shared-group RunningProcess only times out its direct child. The pump
     // owns the shared group deadline so descendants holding inherited pipes are
     // killed as well.
-    let pk = build_pk(&cmd, false);
+    let pk = build_pk(&cmd, false, {
+        #[cfg(windows)]
+        {
+            shutdown_helper.is_some()
+        }
+        #[cfg(not(windows))]
+        {
+            false
+        }
+    });
 
     let spawn_error = |error: processkit::Error| ProcessError::Spawn {
         program: program.clone(),
@@ -275,6 +356,16 @@ pub(crate) async fn spawn(cmd: Command) -> Result<SpawnParts, ProcessError> {
     let pid = run
         .pid()
         .ok_or_else(|| ProcessError::Engine("spawned process has no pid".into()))?;
+    #[cfg(windows)]
+    let shutdown = shutdown_helper.and_then(|helper| {
+        match super::windows_shutdown::TargetProcess::open(pid) {
+            Ok(target) => Some(super::windows_shutdown::Shutdown::new(helper, pid, target)),
+            Err(error) => {
+                tracing::warn!(%error, pid, "failed to retain core process identity; graceful shutdown is unavailable");
+                None
+            }
+        }
+    });
     if let Some(g) = &pid_guard
         && let Err(e) = g.write(pid).await
     {
@@ -295,7 +386,7 @@ pub(crate) async fn spawn(cmd: Command) -> Result<SpawnParts, ProcessError> {
         None
     };
     let events = run
-        .output_events()
+        .events()
         .map_err(|error| ProcessError::Engine(error.to_string()))?;
 
     let (ev_tx, ev_rx) = mpsc::channel(capacity);
@@ -313,6 +404,8 @@ pub(crate) async fn spawn(cmd: Command) -> Result<SpawnParts, ProcessError> {
         ctrl_rx,
         term_tx,
         pid_guard,
+        #[cfg(windows)]
+        shutdown,
     }));
 
     Ok(SpawnParts {
@@ -336,7 +429,10 @@ async fn pump(parts: PumpParts) {
         mut ctrl_rx,
         term_tx,
         pid_guard,
+        #[cfg(windows)]
+        mut shutdown,
     } = parts;
+    let mut shutdown_helper: Option<tokio::process::Child> = None;
     let mut finish = Box::pin(run.finish());
     let mut finish_output: Option<FinishOutput> = None;
     let mut pending_event = None;
@@ -361,13 +457,25 @@ async fn pump(parts: PumpParts) {
             biased;
             ctrl = ctrl_rx.recv(), if ctrl_open => match ctrl {
                 Some(ctrl) => {
-                    if handle_ctrl(
+                    #[cfg(windows)]
+                    let handled = handle_ctrl(
                         ctrl,
                         &group,
                         &stdin_tx,
                         kill_grace,
                         &mut hard_kill_at,
-                    ) {
+                        &mut shutdown,
+                        &mut shutdown_helper,
+                    );
+                    #[cfg(not(windows))]
+                    let handled = handle_ctrl(
+                        ctrl,
+                        &group,
+                        &stdin_tx,
+                        kill_grace,
+                        &mut hard_kill_at,
+                    );
+                    if handled {
                         dying = true;
                         if pending_event.is_some() && drop_pending_at.is_none() {
                             drop_pending_at = Some(tokio::time::Instant::now() + DYING_EVENT_STALL);
@@ -380,12 +488,22 @@ async fn pump(parts: PumpParts) {
                 hard_kill_at = None;
                 dying = true;
                 let _ = group.kill_all();
+                #[cfg(windows)]
+                stop_shutdown_helper(&mut shutdown_helper).await;
                 if pending_event.is_some() && drop_pending_at.is_none() {
                     drop_pending_at = Some(tokio::time::Instant::now() + DYING_EVENT_STALL);
                 }
             }
             result = &mut finish, if finish_output.is_none() => {
                 let out = normalize_finish(result);
+                // `finish` has consumed and reaped the direct child. Do not
+                // allow a late repeated stop to launch a helper against a PID
+                // that Windows may already have reused.
+                #[cfg(windows)]
+                {
+                    stop_shutdown_helper(&mut shutdown_helper).await;
+                    shutdown = None;
+                }
                 dying = true;
                 if pending_event.is_some() && drop_pending_at.is_none() {
                     drop_pending_at = Some(tokio::time::Instant::now() + DYING_EVENT_STALL);
@@ -396,6 +514,12 @@ async fn pump(parts: PumpParts) {
                 };
                 let _ = term_tx.send(Some(watch));
                 finish_output = Some(out);
+            }
+            _ = tokio::time::sleep(Duration::from_millis(20)), if shutdown_helper.is_some() => {
+                if let Some(error) = check_shutdown_helper(&mut shutdown_helper) {
+                    tracing::warn!(%error, "console shutdown helper failed; killing process tree");
+                    let _ = group.kill_all();
+                }
             }
             _ = hard_kill_deadline(drop_pending_at), if dying && !drop_output && pending_event.is_some() => {
                 drop_pending_at = None;
@@ -421,7 +545,7 @@ async fn pump(parts: PumpParts) {
                 drop_pending_at = None;
             }
             event = events.next(), if pending_event.is_none() => match event {
-                Some(processkit::OutputEvent::Stdout(line)) => {
+                Some(processkit::ProcessEvent::Stdout(line)) => {
                     if drop_output {
                         dropped_output_events += 1;
                     } else if events_open {
@@ -431,7 +555,7 @@ async fn pump(parts: PumpParts) {
                         }
                     }
                 }
-                Some(processkit::OutputEvent::Stderr(line)) => {
+                Some(processkit::ProcessEvent::Stderr(line)) => {
                     if drop_output {
                         dropped_output_events += 1;
                     } else if events_open {
@@ -468,6 +592,10 @@ async fn pump(parts: PumpParts) {
                                 &stdin_tx,
                                 kill_grace,
                                 &mut hard_kill_at,
+                                #[cfg(windows)]
+                                &mut shutdown,
+                                #[cfg(windows)]
+                                &mut shutdown_helper,
                             );
                         }
                         None => ctrl_open = false,
@@ -475,11 +603,26 @@ async fn pump(parts: PumpParts) {
                     _ = hard_kill_deadline(hard_kill_at) => {
                         hard_kill_at = None;
                         let _ = group.kill_all();
+                        #[cfg(windows)]
+                        stop_shutdown_helper(&mut shutdown_helper).await;
                     }
                     _ = ev_tx.closed(), if events_open => events_open = false,
                     result = &mut finish => break normalize_finish(result),
+                    _ = tokio::time::sleep(Duration::from_millis(20)), if shutdown_helper.is_some() => {
+                        if let Some(error) = check_shutdown_helper(&mut shutdown_helper) {
+                            tracing::warn!(%error, "console shutdown helper failed; killing process tree");
+                            let _ = group.kill_all();
+                        }
+                    }
                 }
             };
+            // This path also consumes `finish`; retire the Windows helper
+            // before the terminal-event flush continues accepting controls.
+            #[cfg(windows)]
+            {
+                stop_shutdown_helper(&mut shutdown_helper).await;
+                shutdown = None;
+            }
             let watch = match &out.error {
                 Some(error) => Err(error.clone()),
                 None => Ok(out.payload.clone()),
@@ -521,6 +664,10 @@ async fn pump(parts: PumpParts) {
                         &stdin_tx,
                         kill_grace,
                         &mut hard_kill_at,
+                        #[cfg(windows)]
+                        &mut shutdown,
+                        #[cfg(windows)]
+                        &mut shutdown_helper,
                     );
                 }
                 None => ctrl_open = false,
@@ -528,6 +675,8 @@ async fn pump(parts: PumpParts) {
             _ = hard_kill_deadline(hard_kill_at) => {
                 hard_kill_at = None;
                 let _ = group.kill_all();
+                #[cfg(windows)]
+                stop_shutdown_helper(&mut shutdown_helper).await;
             }
             _ = ev_tx.closed() => events_open = false,
             permit = ev_tx.reserve() => match permit {

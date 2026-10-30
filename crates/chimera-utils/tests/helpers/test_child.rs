@@ -5,6 +5,15 @@ use std::{io::Write, time::Duration};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
+    #[cfg(windows)]
+    if let Some(result) = chimera_utils::process::windows_shutdown_helper_entry() {
+        if let Err(error) = result {
+            eprintln!("shutdown helper failed: {error}");
+            std::process::exit(2);
+        }
+        return;
+    }
+
     let mut args = std::env::args().skip(1);
     let mode = args.next().unwrap_or_default();
     match mode.as_str() {
@@ -52,6 +61,16 @@ async fn main() {
                 sleep_forever().await;
             }
         }
+        "wait-for-ctrl-break" => {
+            let marker = args.next().expect("marker path");
+            #[cfg(windows)]
+            wait_for_ctrl_break(marker).await;
+            #[cfg(not(windows))]
+            {
+                let _ = marker;
+                panic!("wait-for-ctrl-break is only available on Windows");
+            }
+        }
         "spawn-grandchild" => {
             let exe = std::env::current_exe().expect("current_exe");
             #[expect(
@@ -81,6 +100,15 @@ async fn main() {
             std::process::exit(2);
         }
     }
+}
+
+#[cfg(windows)]
+async fn wait_for_ctrl_break(marker: String) {
+    let mut signal = tokio::signal::windows::ctrl_break().expect("register Ctrl+Break handler");
+    println!("ready");
+    std::io::stdout().flush().expect("flush ready marker");
+    signal.recv().await;
+    std::fs::write(marker, b"ctrl-break-received").expect("write signal marker");
 }
 
 async fn sleep_forever() -> ! {

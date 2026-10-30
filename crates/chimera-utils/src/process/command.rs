@@ -24,6 +24,7 @@ pub struct Command {
     pub(crate) timeout: Option<Duration>,
     pub(crate) pipe_stdin: bool,
     pub(crate) pid_file: Option<PidFile>,
+    pub(crate) windows_shutdown_helper: Option<PathBuf>,
 }
 
 impl Command {
@@ -41,6 +42,7 @@ impl Command {
             timeout: None,
             pipe_stdin: false,
             pid_file: None,
+            windows_shutdown_helper: None,
         }
     }
 
@@ -130,6 +132,15 @@ impl Command {
         self
     }
 
+    /// Uses an executable that dispatches `windows_shutdown_helper_entry` to
+    /// send a targeted Ctrl+Break event during graceful shutdown on Windows.
+    /// The process manager falls back to immediate tree termination when no
+    /// attachable console is available.
+    pub fn windows_shutdown_helper(mut self, path: impl Into<PathBuf>) -> Self {
+        self.windows_shutdown_helper = Some(path.into());
+        self
+    }
+
     /// Spawns the child. `ProcessEvent::Terminated`, when delivered, is the
     /// final event on the channel; use [`super::handle::ProcessHandle::wait`]
     /// for the authoritative termination signal.
@@ -182,6 +193,7 @@ mod tests {
         assert!(!c.pipe_stdin);
         assert!(c.encoding.is_none());
         assert!(c.pid_file.is_none());
+        assert!(c.windows_shutdown_helper.is_none());
         assert!(c.timeout.is_none());
     }
 
@@ -195,11 +207,16 @@ mod tests {
             .kill_grace(Duration::from_secs(1))
             .event_channel_capacity(8)
             .pipe_stdin(true)
-            .hide_window(false);
+            .hide_window(false)
+            .windows_shutdown_helper("chimera.exe");
         assert_eq!(c.args.len(), 3);
         assert_eq!(c.envs.len(), 1);
         assert_eq!(c.event_channel_capacity, 8);
         assert!(c.pipe_stdin);
         assert!(!c.hide_window);
+        assert_eq!(
+            c.windows_shutdown_helper,
+            Some(PathBuf::from("chimera.exe"))
+        );
     }
 }

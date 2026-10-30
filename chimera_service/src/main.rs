@@ -52,6 +52,17 @@ pub async fn handler() -> ExitCode {
 }
 
 fn main() -> ExitCode {
+    #[cfg(windows)]
+    if let Some(result) = chimera_utils::process::windows_shutdown_helper_entry() {
+        return match result {
+            Ok(()) => ExitCode::Normal,
+            Err(error) => {
+                eprintln!("Windows core shutdown helper failed: {error}");
+                ExitCode::Other
+            }
+        };
+    }
+
     #[cfg(feature = "dev")]
     logging::init(true, false).unwrap();
     let mut rx = register_ctrlc_handler();

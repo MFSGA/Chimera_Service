@@ -146,6 +146,7 @@ pub struct InstanceBuilder {
     liveness_with_readiness: bool,
     log_tx: Option<broadcast::Sender<Arc<LogFrame>>>,
     pipe_security_descriptor: Option<String>,
+    windows_shutdown_helper: Option<std::path::PathBuf>,
 }
 
 impl Instance {
@@ -165,6 +166,7 @@ impl Instance {
             liveness_with_readiness: false,
             log_tx: None,
             pipe_security_descriptor: None,
+            windows_shutdown_helper: None,
         }
     }
 
@@ -188,6 +190,7 @@ impl Instance {
             liveness_with_readiness,
             log_tx,
             pipe_security_descriptor,
+            windows_shutdown_helper,
         } = builder;
         if tokio::fs::metadata(&spec.config_path).await.is_err() {
             return Err(Error::ConfigNotFound(spec.config_path.clone()));
@@ -240,6 +243,7 @@ impl Instance {
                     epoch,
                     &controller,
                     pipe_security_descriptor.as_deref(),
+                    windows_shutdown_helper.as_deref(),
                 )
             }
         })
@@ -477,6 +481,11 @@ impl InstanceBuilder {
         self
     }
 
+    pub(crate) fn windows_shutdown_helper(mut self, helper: Option<std::path::PathBuf>) -> Self {
+        self.windows_shutdown_helper = helper;
+        self
+    }
+
     pub fn readiness_probe(mut self, probe: ProbeHandle) -> Self {
         self.readiness_probe = Some(probe);
         self
@@ -521,6 +530,7 @@ fn build_command(
     epoch: Epoch,
     controller: &ResolvedController,
     pipe_security_descriptor: Option<&str>,
+    windows_shutdown_helper: Option<&std::path::Path>,
 ) -> Command {
     let mut args = kind::run_args(spec.core.kind, spec.core_paths())
         .expect("kind validated in Instance::spawn");
@@ -539,6 +549,9 @@ fn build_command(
         .current_dir(spec.working_dir.as_str());
     if let Some(sddl) = pipe_security_descriptor {
         command = command.env("LISTEN_NAMEDPIPE_SDDL", sddl);
+    }
+    if let Some(helper) = windows_shutdown_helper {
+        command = command.windows_shutdown_helper(helper);
     }
     if let Some(pid_file) = &spec.pid_file {
         command = if epoch_pid_path(spec, epoch).is_some() {

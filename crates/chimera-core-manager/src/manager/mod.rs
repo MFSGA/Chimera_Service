@@ -376,6 +376,7 @@ impl CoreManager {
             Arc::new(ProcessRuntimeBackend::new(
                 probes,
                 options.cancel_token.clone(),
+                options.windows_shutdown_helper.clone(),
             ))
         });
         Ok(Self {
