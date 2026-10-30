@@ -849,12 +849,12 @@ fn spawn_forwarder(
 mod tests {
     use std::sync::Arc;
 
-    use super::{EpochAllocator, EpochPlan};
+    use super::{CoreManager, EpochAllocator, EpochPlan};
     use crate::{
         Feature, RuntimeFeature,
         epoch::epoch,
         kind::CoreKind,
-        spec::{CoreSpec, InstanceOptions, InstanceSpec, ResolvedController},
+        spec::{CoreSpec, InstanceOptions, InstanceSpec, ManagerOptions, ResolvedController},
         state::ConfigRevision,
     };
     use camino::Utf8PathBuf;
@@ -873,6 +873,42 @@ mod tests {
     #[should_panic(expected = "epoch space exhausted")]
     fn epoch_exhaustion_is_an_invariant_violation_not_a_wrap() {
         EpochAllocator::seeded(u64::MAX).next();
+    }
+
+    #[tokio::test]
+    async fn startup_sweeps_a_record_whose_pid_was_reused() {
+        let temp = tempfile::tempdir().unwrap();
+        let runtime_dir = Utf8PathBuf::from_path_buf(temp.path().join("runtime")).unwrap();
+        std::fs::create_dir_all(&runtime_dir).unwrap();
+        let runtime_config = runtime_dir.join("config-8.yaml");
+        std::fs::write(&runtime_config, "stale: true\n").unwrap();
+        let hex =
+            |text: &str| -> String { text.bytes().map(|byte| format!("{byte:02x}")).collect() };
+        let pid_path = runtime_dir.join("core-8.pid");
+        std::fs::write(
+            &pid_path,
+            format!(
+                "version=2\npid={}\nepoch=8\nexecutable={}\nstart-token=1\nruntime-config={}\n",
+                std::process::id(),
+                hex("mihomo"),
+                hex(runtime_config.as_str()),
+            ),
+        )
+        .unwrap();
+
+        let manager = CoreManager::new(ManagerOptions {
+            runtime_dir: Some(runtime_dir),
+            ..ManagerOptions::default()
+        })
+        .await
+        .expect("a reused pid must not prevent manager startup");
+
+        assert!(!pid_path.exists(), "the stale PID record should be swept");
+        assert!(
+            !runtime_config.exists(),
+            "stale runtime configuration should be swept"
+        );
+        manager.shutdown().await.unwrap();
     }
 
     #[test]
