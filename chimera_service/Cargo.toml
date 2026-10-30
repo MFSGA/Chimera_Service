@@ -98,6 +98,11 @@ tempfile = "3"
 check_elevation = "0.2.4"
 windows-service = "0.8"
 windows = { workspace = true }
+# The shutdown helper uses the runtime's process implementation, separate from
+# the platform utility crate used by the Service command and IPC layers.
+chimera-process-utils = { package = "chimera-utils", path = "../crates/chimera-utils", default-features = false, features = [
+    "process",
+] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

@@ -551,6 +551,7 @@ dependencies = [
  "check_elevation",
  "chimera-core-manager",
  "chimera-ipc",
+ "chimera-utils",
  "chimera_utils",
  "chrono",
  "clap",

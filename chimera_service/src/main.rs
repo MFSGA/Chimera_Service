@@ -53,7 +53,7 @@ pub async fn handler() -> ExitCode {
 
 fn main() -> ExitCode {
     #[cfg(windows)]
-    if let Some(result) = chimera_utils::process::windows_shutdown_helper_entry() {
+    if let Some(result) = chimera_process_utils::process::windows_shutdown_helper_entry() {
         return match result {
             Ok(()) => ExitCode::Normal,
             Err(error) => {
