@@ -247,6 +247,25 @@ pub async fn read_epoch_pid_file(
     parse_epoch_record(&raw).map(Some)
 }
 
+/// Reports whether a recorded process is still alive by checking its full
+/// identity, rather than relying on a reusable PID alone.
+///
+/// A matching PID with an ambiguous identity is an error, never proof of death.
+pub fn recorded_process_is_alive(raw: &str) -> std::io::Result<bool> {
+    let record = parse_epoch_record(raw)?;
+    let Some(identity) = process_identity(record.pid)? else {
+        return Ok(false);
+    };
+    match compare_identity(&record, &identity) {
+        IdentityMatch::Same => Ok(true),
+        IdentityMatch::Reused => Ok(false),
+        IdentityMatch::Uncertain => Err(identity_error(format!(
+            "cannot prove whether live pid {} is the recorded process",
+            record.pid
+        ))),
+    }
+}
+
 /// Kills the orphan in `path` only after validating the full epoch record and
 /// proving that both pid and runtime config are contained by `runtime_dir`.
 ///

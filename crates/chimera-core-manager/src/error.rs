@@ -63,6 +63,8 @@ pub enum Error {
     #[error("core failed to start; diagnostic log tail:\n{stderr_tail}")]
     StartupFailed { stderr_tail: String },
     #[error(transparent)]
+    NativeStore(#[from] crate::native_store::StoreError),
+    #[error(transparent)]
     Process(#[from] chimera_utils::process::ProcessError),
     #[error(transparent)]
     Api(#[from] clash_api::Error),
@@ -94,6 +96,7 @@ impl Error {
             Self::ConfigCheckFailed(_) => Some(CoreErrorKind::ConfigCheckFailed),
             Self::InvalidConfig(_) | Self::Yaml(_) => Some(CoreErrorKind::InvalidConfig),
             Self::StopUnconfirmed(_) => Some(CoreErrorKind::StopUnconfirmed),
+            Self::NativeStore(_) => Some(CoreErrorKind::NativeStoreUnavailable),
             Self::ManagerQuarantined { .. } => Some(CoreErrorKind::Quarantined),
             Self::RevisionConflict { .. } => Some(CoreErrorKind::RevisionConflict),
             Self::ApplyFailed(_) => Some(CoreErrorKind::ApplyFailed),

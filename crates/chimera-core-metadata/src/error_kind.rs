@@ -36,6 +36,8 @@ pub enum CoreErrorKind {
     ApplyRollbackFailed,
     /// A core process could not be proven dead; the manager is now quarantined.
     StopUnconfirmed,
+    /// Native core data cannot be safely acquired or verified.
+    NativeStoreUnavailable,
     /// The control plane is shutting down and admits no new operations.
     ShuttingDown,
     /// The bounded operation queue is full; retry after in-flight work drains.
@@ -69,6 +71,7 @@ impl CoreErrorKind {
         Self::ApplyFailed,
         Self::ApplyRollbackFailed,
         Self::StopUnconfirmed,
+        Self::NativeStoreUnavailable,
         Self::ShuttingDown,
         Self::QueueFull,
         Self::OperationConflict,
@@ -93,6 +96,7 @@ impl CoreErrorKind {
             Self::ApplyFailed => "apply_failed",
             Self::ApplyRollbackFailed => "apply_rollback_failed",
             Self::StopUnconfirmed => "stop_unconfirmed",
+            Self::NativeStoreUnavailable => "native_store_unavailable",
             Self::ShuttingDown => "shutting_down",
             Self::QueueFull => "queue_full",
             Self::OperationConflict => "operation_conflict",
