@@ -7,6 +7,7 @@ use std::{
     time::Duration,
 };
 
+use atomic_enum::atomic_enum;
 use tokio_util::sync::CancellationToken;
 
 use super::{
@@ -16,9 +17,21 @@ use super::{
     handle::ProcessHandle,
 };
 
+type PrepareHook = Arc<dyn Fn() -> Result<(), ProcessError> + Send + Sync>;
 type Factory = Arc<dyn Fn() -> Command + Send + Sync>;
 type EventHook = Arc<dyn Fn(SupervisorEvent) + Send + Sync>;
 type ProcessEventHook = Arc<dyn Fn(ProcessEvent) + Send + Sync>;
+
+/// Selects how the supervisor stops its current child process tree.
+#[atomic_enum]
+#[derive(Default, PartialEq, Eq)]
+pub enum StopStrategy {
+    /// Requests graceful termination, falling back to a hard kill on failure.
+    #[default]
+    Graceful,
+    /// Kills the process tree immediately.
+    Kill,
+}
 
 /// Controls whether and how often failed children are restarted.
 ///
@@ -145,11 +158,13 @@ pub enum SupervisorEvent {
     Exited(TerminatedPayload),
     Restarting { attempt: u32, delay: Duration },
     GaveUp,
+    PreparationFailed { detail: String },
     Stopped,
 }
 
 pub struct SupervisorBuilder {
     factory: Factory,
+    preparation: Option<PrepareHook>,
     policy: RestartPolicy,
     backoff: Backoff,
     readiness: ReadinessProbe,
@@ -157,6 +172,7 @@ pub struct SupervisorBuilder {
     on_event: Option<EventHook>,
     on_process_event: Option<ProcessEventHook>,
     cancel_token: Option<CancellationToken>,
+    stop_strategy: Arc<AtomicStopStrategy>,
 }
 
 /// Handle to a running supervision loop.
@@ -166,20 +182,20 @@ pub struct SupervisorBuilder {
 /// [`Supervisor::stop`] for deterministic shutdown.
 pub struct Supervisor {
     token: CancellationToken,
+    stop_strategy: Arc<AtomicStopStrategy>,
     current: Arc<tokio::sync::Mutex<Option<ProcessHandle>>>,
     ready_tx: tokio::sync::mpsc::UnboundedSender<u32>,
     ready_pending: Arc<AtomicU32>,
     task: Option<tokio::task::JoinHandle<()>>,
 }
 
-async fn stop_process(handle: ProcessHandle) -> Result<(), ProcessError> {
-    if handle.graceful_kill().await.is_err() {
-        match handle.kill().await {
-            Err(ProcessError::AlreadyExited) => Ok(()),
-            result => result,
-        }
-    } else {
-        Ok(())
+async fn stop_process(handle: ProcessHandle, strategy: StopStrategy) -> Result<(), ProcessError> {
+    if matches!(strategy, StopStrategy::Graceful) && handle.graceful_kill().await.is_ok() {
+        return Ok(());
+    }
+    match handle.kill().await {
+        Err(ProcessError::AlreadyExited) => Ok(()),
+        result => result,
     }
 }
 
@@ -190,6 +206,7 @@ impl Supervisor {
     {
         SupervisorBuilder {
             factory: Arc::new(factory),
+            preparation: None,
             policy: RestartPolicy::OnFailure { max_restarts: 5 },
             backoff: Backoff::exponential(BackoffRange {
                 initial: Duration::from_secs(1),
@@ -201,6 +218,7 @@ impl Supervisor {
             on_event: None,
             on_process_event: None,
             cancel_token: None,
+            stop_strategy: Arc::new(AtomicStopStrategy::new(StopStrategy::default())),
         }
     }
 
@@ -235,7 +253,10 @@ impl Supervisor {
         self.token.cancel();
         let current = self.current.lock().await.take();
         let stop_result = match current {
-            Some(handle) => stop_process(handle).await,
+            Some(handle) => {
+                let strategy = self.stop_strategy.load(Ordering::Acquire);
+                stop_process(handle, strategy).await
+            }
             None => Ok(()),
         };
         self.task
@@ -299,6 +320,25 @@ impl SupervisorBuilder {
         self
     }
 
+    /// Shares the host's stop strategy; the default is graceful shutdown.
+    ///
+    /// A forced shutdown stores Kill with Release ordering before cancelling
+    /// the root token. Supervisors read it with Acquire ordering at stop time.
+    pub fn stop_strategy(mut self, strategy: Arc<AtomicStopStrategy>) -> Self {
+        self.stop_strategy = strategy;
+        self
+    }
+
+    /// Prepares external resources before every process start, including respawns.
+    /// A preparation failure is terminal: it must not launch the child.
+    pub fn before_spawn<F>(mut self, prepare: F) -> Self
+    where
+        F: Fn() -> Result<(), ProcessError> + Send + Sync + 'static,
+    {
+        self.preparation = Some(Arc::new(prepare));
+        self
+    }
+
     /// Starts the supervision loop.
     ///
     /// The first spawn happens before this method returns, so its failure is
@@ -334,6 +374,12 @@ impl SupervisorBuilder {
             }
         };
 
+        if let Some(prepare) = &self.preparation {
+            prepare()?;
+        }
+        if token.is_cancelled() {
+            return Err(ProcessError::Engine("spawn preparation cancelled".into()));
+        }
         let (first_handle, first_rx) = (self.factory)().spawn().await?;
         let first_pid = first_handle.pid();
         if matches!(self.readiness, ReadinessProbe::Acknowledged) {
@@ -342,6 +388,7 @@ impl SupervisorBuilder {
         emit(SupervisorEvent::Started { pid: first_pid });
         *current.lock().await = Some(first_handle);
 
+        let preparation = self.preparation;
         let factory = self.factory;
         let policy = self.policy;
         let backoff = self.backoff;
@@ -350,6 +397,7 @@ impl SupervisorBuilder {
         let on_process_event = self.on_process_event;
         let token_ = token.clone();
         let current_ = current.clone();
+        let stop_strategy = self.stop_strategy.clone();
         let ready_pending_ = ready_pending.clone();
 
         let task = tokio::spawn(async move {
@@ -376,8 +424,9 @@ impl SupervisorBuilder {
                                 cancelled = true;
                                 readiness_pending = false;
                                 if let Some(handle) = current_.lock().await.take() {
+                                    let strategy = stop_strategy.load(Ordering::Acquire);
                                     kill_task = Some(tokio::spawn(async move {
-                                        let _ = stop_process(handle).await;
+                                        let _ = stop_process(handle, strategy).await;
                                     }));
                                 }
                             }
@@ -487,6 +536,23 @@ impl SupervisorBuilder {
                     return;
                 }
 
+                if let Some(prepare) = &preparation
+                    && let Err(error) = prepare()
+                {
+                    if token_.is_cancelled() {
+                        emit(SupervisorEvent::Stopped);
+                    } else {
+                        emit(SupervisorEvent::PreparationFailed {
+                            detail: error.to_string(),
+                        });
+                    }
+                    return;
+                }
+                if token_.is_cancelled() {
+                    emit(SupervisorEvent::Stopped);
+                    return;
+                }
+
                 match (factory)().spawn().await {
                     Ok((handle, rx)) => {
                         let pid = handle.pid();
@@ -508,6 +574,7 @@ impl SupervisorBuilder {
 
         Ok(Supervisor {
             token,
+            stop_strategy: self.stop_strategy,
             current,
             ready_tx,
             ready_pending,
