@@ -98,7 +98,9 @@ impl RuntimeBackend for ProcessRuntimeBackend {
             .pipe_security_descriptor(descriptor)
             .native_store(
                 lease,
-                self.native_store.as_ref().map(|store| store.data_dir().to_owned()),
+                self.native_store
+                    .as_ref()
+                    .map(|store| store.data_dir().to_owned()),
             )
             .windows_shutdown_helper(self.windows_shutdown_helper.clone());
             if let Some(strategy) = &self.stop_strategy {
@@ -154,8 +156,9 @@ impl RuntimeBackend for ProcessRuntimeBackend {
                 // Checking configuration must not touch a live core's database.
                 let home = store.check_home()?;
                 let mut isolated = spec.clone();
-                isolated.working_dir = camino::Utf8PathBuf::from_path_buf(home.path().to_owned())
-                    .map_err(|_| Error::InvalidConfig("temporary path is not UTF-8".into()))?;
+                isolated.working_dir =
+                    camino::Utf8PathBuf::from_path_buf(home.path().to_owned())
+                        .map_err(|_| Error::InvalidConfig("temporary path is not UTF-8".into()))?;
                 let mut document: serde_yaml_ng::Mapping =
                     serde_yaml_ng::from_slice(&tokio::fs::read(&spec.config_path).await?)?;
                 crate::native_store::rewrite_paths(spec.core.kind, &mut document, store.data_dir());

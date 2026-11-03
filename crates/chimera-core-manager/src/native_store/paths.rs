@@ -157,7 +157,10 @@ proxies:
         );
         assert_eq!(proxies[1]["private-key"], "CAsAAABhYmM=");
         assert_eq!(proxies[2]["private-key"], resolved("ssh.key"));
-        assert_eq!(proxies[3]["realm-opts"]["certificate"], resolved("realm.pem"));
+        assert_eq!(
+            proxies[3]["realm-opts"]["certificate"],
+            resolved("realm.pem")
+        );
         assert_eq!(proxies[4]["planet"], resolved("planet.bin"));
     }
 }
