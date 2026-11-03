@@ -10,6 +10,7 @@ mod switching;
 
 use std::sync::Arc;
 
+use chimera_utils::process::AtomicStopStrategy;
 use enumset::EnumSet;
 use serde_yaml_ng::Mapping;
 use tokio::sync::{broadcast, watch};
@@ -43,6 +44,7 @@ pub enum DegradeReason {
     InboundConflict,
     PatchFailed,
     HttpController,
+    NativeStoreShared,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -105,6 +107,8 @@ pub struct CoreManagerBuilder {
     backend: Option<Arc<dyn RuntimeBackend>>,
     dns: Option<Arc<dyn DnsController>>,
     controller_access: Option<Arc<dyn crate::ControllerAccess>>,
+    native_store: Option<Arc<dyn crate::native_store::NativeStore>>,
+    stop_strategy: Option<Arc<AtomicStopStrategy>>,
 }
 
 struct Inner {
@@ -113,6 +117,7 @@ struct Inner {
     dns: Option<Arc<dyn DnsController>>,
     config_commits: watch::Sender<Option<crate::EffectiveConfigSnapshot>>,
     controller_access: Option<Arc<dyn crate::ControllerAccess>>,
+    native_store: Option<Arc<dyn crate::native_store::NativeStore>>,
     store: RuntimeConfigStore,
     ctrl: tokio::sync::Mutex<Ctrl>,
     status_tx: watch::Sender<CoreStatus>,
@@ -281,6 +286,17 @@ impl CoreManagerBuilder {
         self
     }
 
+    pub fn native_store(mut self, store: Arc<dyn crate::native_store::NativeStore>) -> Self {
+        self.native_store = Some(store);
+        self
+    }
+
+    /// Shares the host's stop strategy with all default process supervisors.
+    pub fn stop_strategy(mut self, strategy: Arc<AtomicStopStrategy>) -> Self {
+        self.stop_strategy = Some(strategy);
+        self
+    }
+
     pub async fn build(self) -> Result<CoreManager, Error> {
         CoreManager::build_configured(self).await
     }
@@ -294,6 +310,8 @@ impl CoreManager {
             backend: None,
             dns: None,
             controller_access: None,
+            native_store: None,
+            stop_strategy: None,
         }
     }
 
@@ -308,6 +326,8 @@ impl CoreManager {
             backend,
             dns,
             controller_access,
+            native_store,
+            stop_strategy,
         } = builder;
         let runtime_dir = options
             .runtime_dir
@@ -376,7 +396,9 @@ impl CoreManager {
             Arc::new(ProcessRuntimeBackend::new(
                 probes,
                 options.cancel_token.clone(),
+                native_store.clone(),
                 options.windows_shutdown_helper.clone(),
+                stop_strategy,
             ))
         });
         Ok(Self {
@@ -386,6 +408,7 @@ impl CoreManager {
                 dns,
                 config_commits: watch::Sender::new(None),
                 controller_access,
+                native_store,
                 store,
                 ctrl: tokio::sync::Mutex::new(Ctrl::new(max_epoch)),
                 status_tx,
