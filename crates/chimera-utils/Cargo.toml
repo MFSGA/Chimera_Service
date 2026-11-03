@@ -43,6 +43,7 @@ atomic_fs = ["dep:nix", "dep:windows"]
 process = [
   "atomic_fs",
   "os",
+  "dep:atomic_enum",
   "dep:encoding_rs",
   "dep:kill_tree",
   "dep:libc",
@@ -55,6 +56,7 @@ process = [
 reqwest = ["dep:backon", "dep:reqwest", "dep:reqwest-websocket"]
 
 [dependencies]
+atomic_enum = { version = "0.3", optional = true }
 chimera-platform-utils.workspace = true
 backon = { version = "1.6", optional = true }
 camino = { version = "1.1", optional = true }
