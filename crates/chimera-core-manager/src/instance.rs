@@ -9,8 +9,9 @@ use std::{
 };
 
 use chimera_utils::process::{
-    AtomicStopStrategy, Command, EpochPidFile, EpochPidFileSpec, OrphanReapOutcome, ProcessError, ProcessEvent,
-    ReadinessProbe, Supervisor, SupervisorEvent, TerminatedPayload, reap_epoch_pid_file,
+    AtomicStopStrategy, Command, EpochPidFile, EpochPidFileSpec, OrphanReapOutcome, ProcessError,
+    ProcessEvent, ReadinessProbe, Supervisor, SupervisorEvent, TerminatedPayload,
+    reap_epoch_pid_file,
 };
 use tokio::{
     sync::{broadcast, mpsc, oneshot, watch},
