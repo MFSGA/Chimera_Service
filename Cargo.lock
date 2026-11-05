@@ -469,7 +469,7 @@ dependencies = [
 
 [[package]]
 name = "chimera-clash-api"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "backon",
  "chimera-utils",
@@ -492,7 +492,7 @@ dependencies = [
 
 [[package]]
 name = "chimera-core-manager"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "camino",
  "chimera-clash-api",
@@ -519,7 +519,7 @@ dependencies = [
 
 [[package]]
 name = "chimera-ipc"
-version = "1.11.0"
+version = "1.11.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -553,7 +553,7 @@ dependencies = [
 
 [[package]]
 name = "chimera-service"
-version = "1.11.0"
+version = "1.11.1"
 dependencies = [
  "ansi-str",
  "anyhow",
@@ -606,7 +606,7 @@ dependencies = [
 
 [[package]]
 name = "chimera-service-core-metadata"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "constcat",
  "enumset",
@@ -619,7 +619,7 @@ dependencies = [
 
 [[package]]
 name = "chimera-utils"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "atomic_enum",
  "backon",
@@ -751,7 +751,7 @@ checksum = "3a822ea5bc7590f9d40f1ba12c0dc3c2760f3482c6984db1573ad11031420831"
 
 [[package]]
 name = "clash-api"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "thiserror 2.0.21",
  "url",

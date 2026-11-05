@@ -1,67 +1,29 @@
 
-## [1.11.0] - 2026-10-31 00:36:01
+## [1.11.1] - 2026-11-05 03:33:18
 
 
-### ⚡ Performance Improvements
+### ✨ Features
 
-- **core:** Share effective config snapshots by @MFSGA 
+- **runtime:** Wire native-store leases and stop strategy into core lifecycle by @MFSGA 
 
-
-### 🐛 Bug Fixes
-
-- **runtime:** Enable targeted graceful shutdown on Windows by @MFSGA 
-
-- **runtime:** Safely reap records for reused pids by @MFSGA 
-
-- **service:** Use runtime shutdown helper crate by @MFSGA 
-
-
-### 🔨 Refactor
-
-- **service:** Match ref process helper dependency wiring by @MFSGA 
+- **runtime:** Add native store and supervised process foundations by @MFSGA 
 
 
 ### 🧹 Miscellaneous Tasks
 
-- **deps:** Update rust crate simd-json to 0.19 (#109) by @MFSGA  in [#109](https://github.com/MFSGA/Chimera_Service/pull/109)
+- **deps:** Update renovatebot/github-action action to v46.3.12 ([#112](https://github.com/MFSGA/Chimera_Service/issues/112)) by @MFSGA 
 
-- **deps:** Update rust crate tempfile to v3.27.0 (#90) by @MFSGA  in [#90](https://github.com/MFSGA/Chimera_Service/pull/90)
+- **deps:** Update rust crate tokio to v1.54.1 (#99) by @MFSGA  in [#99](https://github.com/MFSGA/Chimera_Service/pull/99)
 
-- **deps:** Update renovatebot/github-action action to v46.3.10 (#107) by @MFSGA  in [#107](https://github.com/MFSGA/Chimera_Service/pull/107)
+- **deps:** Update cargo-bins/cargo-binstall action to v1.26.2 (#111) by @MFSGA  in [#111](https://github.com/MFSGA/Chimera_Service/pull/111)
 
-- **deps:** Update cargo-bins/cargo-binstall action to v1.26.1 (#106) by @MFSGA  in [#106](https://github.com/MFSGA/Chimera_Service/pull/106)
-
-- **deps:** Update rust crate zerocopy to v0.8.63 (#105) by @MFSGA  in [#105](https://github.com/MFSGA/Chimera_Service/pull/105)
-
-- **deps:** Update rust crate enumset to v1.1.15 (#104) by @MFSGA  in [#104](https://github.com/MFSGA/Chimera_Service/pull/104)
-
-- **deps:** Update rust crate tracing-panic to v0.1.3 (#103) by @MFSGA  in [#103](https://github.com/MFSGA/Chimera_Service/pull/103)
-
-- **deps:** Update rust crate specta to v2.0.0-rc.27 (#102) by @MFSGA  in [#102](https://github.com/MFSGA/Chimera_Service/pull/102)
-
-- **deps:** Update renovatebot/github-action action to v46.3.9 (#101) by @MFSGA  in [#101](https://github.com/MFSGA/Chimera_Service/pull/101)
-
-- **deps:** Update rust crate ipnet to v2.12.2 (#84) by @MFSGA  in [#84](https://github.com/MFSGA/Chimera_Service/pull/84)
-
-- **deps:** Update rust crate libc to v0.2.191 (#98) by @MFSGA  in [#98](https://github.com/MFSGA/Chimera_Service/pull/98)
-
-- **deps:** Update rust crate hyper to v1.12.0 (#89) by @MFSGA  in [#89](https://github.com/MFSGA/Chimera_Service/pull/89)
-
-- **deps:** Update rust crate serde_json to v1.0.154 (#96) by @MFSGA  in [#96](https://github.com/MFSGA/Chimera_Service/pull/96)
-
-- **deps:** Update rust crate schemars to v1.2.3 (#95) by @MFSGA  in [#95](https://github.com/MFSGA/Chimera_Service/pull/95)
-
-- **deps:** Update rust crate interprocess to v2.4.5 (#94) by @MFSGA  in [#94](https://github.com/MFSGA/Chimera_Service/pull/94)
-
-- **deps:** Update renovatebot/github-action action to v46.3.8 (#93) by @MFSGA  in [#93](https://github.com/MFSGA/Chimera_Service/pull/93)
-
-- **deps:** Update cargo-bins/cargo-binstall action to v1.25.3 (#92) by @MFSGA  in [#92](https://github.com/MFSGA/Chimera_Service/pull/92)
+- **runtime:** Remove unused Nyanpasu crates by @MFSGA 
 
 -----------------
 
 
 
-**Full Changelog**: https://github.com/MFSGA/Chimera_Service/compare/v1.10.2...v1.11.0
+**Full Changelog**: https://github.com/MFSGA/Chimera_Service/compare/v1.11.0...v1.11.1
 
 
 
