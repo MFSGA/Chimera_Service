@@ -14,7 +14,6 @@ build = "build.rs"
 tracing = ["tokio/tracing", "dep:console-subscriber"]
 deadlock_detection = [
     # "parking_lot/deadlock_detection",
-    # "nyanpasu-utils/deadlock_detection",
 ]
 
 dev = []

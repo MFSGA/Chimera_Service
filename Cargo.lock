@@ -2182,47 +2182,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nyanpasu-core-manager"
-version = "0.2.0"
-dependencies = [
- "camino",
- "clash-api",
- "enumset",
- "nyanpasu-core-metadata",
- "nyanpasu-utils",
- "thiserror 2.0.21",
- "tokio",
- "tokio-util",
-]
-
-[[package]]
-name = "nyanpasu-core-metadata"
-version = "0.2.0"
-dependencies = [
- "constcat",
- "enumset",
- "schemars",
- "semver",
- "serde",
- "specta",
-]
-
-[[package]]
-name = "nyanpasu-utils"
-version = "0.2.0"
-dependencies = [
- "encoding_rs",
- "kill_tree",
- "libc",
- "sysinfo 0.39.6",
- "tempfile",
- "thiserror 2.0.21",
- "tokio",
- "tokio-util",
- "windows 0.62.2",
-]
-
-[[package]]
 name = "objc2"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

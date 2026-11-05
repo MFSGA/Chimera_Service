@@ -4,9 +4,6 @@ members = [
     "chimera_service",
     "chimera_ipc",
     "crates/clash-api",
-    "crates/nyanpasu-core-manager",
-    "crates/nyanpasu-core-metadata",
-    "crates/nyanpasu-utils",
     "crates/chimera-utils",
     "crates/chimera-core-metadata",
     "crates/chimera-clash-api",
@@ -22,8 +19,6 @@ repository = "https://github.com/MFSGA/Chimera_Service"
 [workspace.dependencies]
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["rt"] }
-
-nyanpasu-utils = { git = "https://github.com/LibNyanpasu/nyanpasu-utils.git", default-features = false }
 
 chimera_utils = { git = "https://github.com/MFSGA/Chimera_Utils.git", default-features = false }
 

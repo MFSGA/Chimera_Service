@@ -43,7 +43,7 @@ pub(crate) struct VersionCache {
 }
 
 pub(crate) struct ResolvedFeatures {
-    /// Capabilities the core build supports, per `nyanpasu-core-metadata`.
+    /// Capabilities the core build supports, per `chimera-core-metadata`.
     pub capabilities: EnumSet<Feature>,
     /// What the manager enabled after weighing capabilities against policy.
     pub runtime: EnumSet<RuntimeFeature>,
