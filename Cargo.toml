@@ -76,3 +76,6 @@ panic = "unwind"
 codegen-units = 1
 lto = true
 opt-level = "s"
+
+[patch.crates-io]
+reqwest-websocket = { path = "vendor/reqwest-websocket" }
