@@ -1,4 +1,4 @@
-use chimera_clash_api::{
+use clash_api::{
     BytesPerSecond, ProviderType, RuleFormat, RuleProviderBehavior, VehicleType,
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};

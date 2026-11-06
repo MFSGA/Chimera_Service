@@ -38,14 +38,14 @@ fn main() {
             let reqwest_websocket::Message::Text(s) = wrapped else {
                 unreachable!()
             };
-            black_box(serde_json::from_str::<chimera_clash_api::ConnectionsSnapshot>(&s).unwrap());
+            black_box(serde_json::from_str::<clash_api::ConnectionsSnapshot>(&s).unwrap());
         });
         measure(&format!("native extras={extras}"), || {
             let native = tungstenite::Message::Text(text.clone());
             let tungstenite::Message::Text(s) = native else {
                 unreachable!()
             };
-            black_box(serde_json::from_str::<chimera_clash_api::ConnectionsSnapshot>(&s).unwrap());
+            black_box(serde_json::from_str::<clash_api::ConnectionsSnapshot>(&s).unwrap());
         });
     }
 }

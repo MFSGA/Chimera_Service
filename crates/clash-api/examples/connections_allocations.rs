@@ -2,7 +2,7 @@
 //! Run with `cargo run -p clash-api --example connections_allocations`.
 use std::hint::black_box;
 
-use chimera_clash_api::ConnectionsSnapshot;
+use clash_api::ConnectionsSnapshot;
 use serde_json::json;
 
 #[global_allocator]

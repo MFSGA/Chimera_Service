@@ -15,7 +15,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
-use chimera_clash_api::{Client, DelayRange, Error, ExponentialRetry, Host, Traffic};
+use clash_api::{Client, DelayRange, Error, ExponentialRetry, Host, Traffic};
 use futures_util::{StreamExt, stream};
 
 const TRAFFIC_ONE: &str = r#"{"up":1,"down":2,"upTotal":3,"downTotal":4}"#;
@@ -82,7 +82,7 @@ async fn traffic_ws_decodes_a_typed_frame() {
         .build()
         .unwrap();
 
-    let mut websocket: chimera_clash_api::WebSocketStream<Traffic> =
+    let mut websocket: clash_api::WebSocketStream<Traffic> =
         client.traffic_ws().await.unwrap();
     let traffic = websocket.next().await.unwrap().unwrap();
 

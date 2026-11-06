@@ -1,4 +1,4 @@
-use chimera_clash_api::{
+use clash_api::{
     ConfigEnum, Connection, ConnectionMetadata, ConnectionNetwork, ConnectionsSnapshot,
 };
 use serde_json::{Value, json};

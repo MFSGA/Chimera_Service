@@ -14,7 +14,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
-use chimera_clash_api::{Client, Host};
+use clash_api::{Client, Host};
 use futures_util::StreamExt;
 use hyper::server::conn::http1;
 use hyper_util::{rt::TokioIo, service::TowerToHyperService};
@@ -240,18 +240,18 @@ async fn busy_pipe_rest_mutation_and_websocket_recover_without_business_retries(
 async fn exhausted_pipe_budget_does_not_enter_the_business_retry_policy() {
     #[derive(Debug)]
     struct UnexpectedRetry;
-    impl chimera_clash_api::RetryPolicy for UnexpectedRetry {
+    impl clash_api::RetryPolicy for UnexpectedRetry {
         fn delays(
             &self,
-            _: &chimera_clash_api::RequestMetadata,
+            _: &clash_api::RequestMetadata,
         ) -> Box<dyn Iterator<Item = Duration> + Send> {
             Box::new(std::iter::repeat(Duration::ZERO))
         }
 
         fn is_retryable(
             &self,
-            _: &chimera_clash_api::RequestMetadata,
-            _: &chimera_clash_api::Error,
+            _: &clash_api::RequestMetadata,
+            _: &clash_api::Error,
         ) -> bool {
             panic!("pipe contention must not receive another retry budget");
         }
@@ -308,7 +308,7 @@ async fn named_pipe_mutations_do_not_follow_redirects() {
     let _ = server.await;
     assert!(matches!(
         result.unwrap(),
-        Err(chimera_clash_api::Error::HttpStatus {
+        Err(clash_api::Error::HttpStatus {
             status: StatusCode::TEMPORARY_REDIRECT,
             ..
         })

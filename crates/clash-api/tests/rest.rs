@@ -4,7 +4,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     routing::{get, put},
 };
-use chimera_clash_api::{
+use clash_api::{
     Client, ConfigPatch, Host, ProviderName, ProxyName, ProxySelection, StorageKey,
     UpdateConfigOptions, UpdateConfigRequest, UpgradeOptions,
 };
@@ -249,12 +249,12 @@ async fn rule_providers_preserve_missing_metadata_unknown_strings_and_order() {
             .collect::<Vec<_>>(),
         ["z", "a", "known"]
     );
-    let minimal = &providers[&chimera_clash_api::RuleProviderName::from("z")];
+    let minimal = &providers[&clash_api::RuleProviderName::from("z")];
     assert_eq!(
         serde_json::to_value(minimal).unwrap(),
         serde_json::json!({"name":"z","payload":null})
     );
-    let future = &providers[&chimera_clash_api::RuleProviderName::from("a")];
+    let future = &providers[&clash_api::RuleProviderName::from("a")];
     assert_eq!(future.behavior.as_ref().unwrap().as_str(), "FutureBehavior");
     assert_eq!(future.format.as_ref().unwrap().as_str(), "FutureFormat");
     assert_eq!(
@@ -270,19 +270,19 @@ async fn rule_providers_preserve_missing_metadata_unknown_strings_and_order() {
     assert_eq!(wire["format"], "FutureFormat");
     assert_eq!(wire["type"], "FutureType");
     assert_eq!(wire["vehicleType"], "FutureVehicle");
-    let known = &providers[&chimera_clash_api::RuleProviderName::from("known")];
+    let known = &providers[&clash_api::RuleProviderName::from("known")];
     assert_eq!(
         known.behavior,
-        Some(chimera_clash_api::RuleProviderBehavior::IpCidr)
+        Some(clash_api::RuleProviderBehavior::IpCidr)
     );
-    assert_eq!(known.format, Some(chimera_clash_api::RuleFormat::MrsRule));
+    assert_eq!(known.format, Some(clash_api::RuleFormat::MrsRule));
     assert_eq!(
         known.provider_type,
-        Some(chimera_clash_api::ProviderType::Rule)
+        Some(clash_api::ProviderType::Rule)
     );
     assert_eq!(
         known.vehicle_type,
-        Some(chimera_clash_api::VehicleType::Http)
+        Some(clash_api::VehicleType::Http)
     );
     server.abort();
 }
@@ -313,10 +313,10 @@ async fn config_reads_preserve_absence_and_unknown_response_enums() {
 #[test]
 fn config_response_validation_does_not_widen_writes_or_subscriptions() {
     assert!(
-        serde_json::from_str::<chimera_clash_api::ConfigPatch>(r#"{"mode":"future-mode"}"#)
+        serde_json::from_str::<clash_api::ConfigPatch>(r#"{"mode":"future-mode"}"#)
             .is_err()
     );
-    assert!(serde_json::from_str::<chimera_clash_api::LogLevel>(r#""trace""#).is_err());
+    assert!(serde_json::from_str::<clash_api::LogLevel>(r#""trace""#).is_err());
     for value in [
         serde_json::json!({"mode":42}),
         serde_json::json!({"mode":{"rule":null}}),
@@ -325,20 +325,20 @@ fn config_response_validation_does_not_widen_writes_or_subscriptions() {
         serde_json::json!({"mixed-port":"zero"}),
         serde_json::json!({"ipv6":"false"}),
     ] {
-        assert!(serde_json::from_value::<chimera_clash_api::RuntimeConfig>(value).is_err());
+        assert!(serde_json::from_value::<clash_api::RuntimeConfig>(value).is_err());
     }
-    let known: chimera_clash_api::RuntimeConfig =
+    let known: clash_api::RuntimeConfig =
         serde_json::from_value(serde_json::json!({"mode":"rule","log-level":"info"})).unwrap();
     assert_eq!(
         known.mode,
-        Some(chimera_clash_api::ConfigEnum::Known(
-            chimera_clash_api::TunnelMode::Rule
+        Some(clash_api::ConfigEnum::Known(
+            clash_api::TunnelMode::Rule
         ))
     );
     assert_eq!(
         known.log_level,
-        Some(chimera_clash_api::ConfigEnum::Known(
-            chimera_clash_api::LogLevel::Info
+        Some(clash_api::ConfigEnum::Known(
+            clash_api::LogLevel::Info
         ))
     );
 }
@@ -380,10 +380,10 @@ fn proxy_metadata_still_rejects_malformed_present_values() {
     for field in ["alive", "xudp", "tfo"] {
         let mut body = serde_json::json!({"name":"p","type":"Direct","udp":true,"history":[]});
         body[field] = serde_json::json!("yes");
-        assert!(serde_json::from_value::<chimera_clash_api::Proxy>(body).is_err());
+        assert!(serde_json::from_value::<clash_api::Proxy>(body).is_err());
     }
     assert!(
-        serde_json::from_value::<chimera_clash_api::Proxy>(
+        serde_json::from_value::<clash_api::Proxy>(
             serde_json::json!({"name":"p","type":"Direct","history":[]})
         )
         .is_err()
@@ -431,7 +431,7 @@ async fn group_lists_accept_mihomo_arrays_and_meow_maps() {
                 }
             }
             None => assert!(
-                matches!(result, Err(chimera_clash_api::Error::Decode { .. })),
+                matches!(result, Err(clash_api::Error::Decode { .. })),
                 "{result:?}"
             ),
         }

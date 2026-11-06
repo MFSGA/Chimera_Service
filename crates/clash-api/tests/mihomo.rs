@@ -21,7 +21,7 @@ use axum::{
     http::{Response, StatusCode},
     routing::get,
 };
-use chimera_clash_api::{
+use clash_api::{
     Client, ConfigPatch, Connection, ConnectionStreamQuery, DelayQuery, DnsQuery, DnsRecordType,
     ExpectedStatus, Host, LogEntry, LogLevel, LogQuery, Memory, ProviderName, ProxyName,
     ProxySelection, RulePatch, RuleProviderName, StorageKey, StructuredLogEntry, Traffic,
@@ -356,11 +356,11 @@ async fn real_mihomo_api_and_transport_matrix() {
     let config = client.configs().await.unwrap();
     assert_eq!(
         config.mode,
-        Some(chimera_clash_api::ConfigEnum::Known(TunnelMode::Rule))
+        Some(clash_api::ConfigEnum::Known(TunnelMode::Rule))
     );
     assert_eq!(
         config.log_level,
-        Some(chimera_clash_api::ConfigEnum::Known(LogLevel::Debug))
+        Some(clash_api::ConfigEnum::Known(LogLevel::Debug))
     );
     assert_eq!(config.allow_lan, Some(false));
 
@@ -617,7 +617,7 @@ async fn assert_streaming_apis(client: &Client, proxied: &reqwest::Client, targe
         .connections_ws(ConnectionStreamQuery::new(Duration::from_millis(100)).unwrap())
         .await
         .unwrap();
-    let _: chimera_clash_api::ConnectionsSnapshot = next_ws_json(&mut connections).await;
+    let _: clash_api::ConnectionsSnapshot = next_ws_json(&mut connections).await;
 
     let mut memory_ws = client.memory_ws().await.unwrap();
     let _: Memory = next_ws_json(&mut memory_ws).await;
@@ -677,7 +677,7 @@ async fn assert_connection_apis(client: &Client, proxied: &reqwest::Client, targ
     second.abort();
 }
 
-async fn next_http_item<T>(stream: &mut chimera_clash_api::HttpStream<T>) -> T
+async fn next_http_item<T>(stream: &mut clash_api::HttpStream<T>) -> T
 where
     T: DeserializeOwned + Send + 'static,
 {
@@ -688,7 +688,7 @@ where
         .unwrap()
 }
 
-async fn next_ws_json<T>(websocket: &mut chimera_clash_api::WebSocketStream<T>) -> T {
+async fn next_ws_json<T>(websocket: &mut clash_api::WebSocketStream<T>) -> T {
     timeout(Duration::from_secs(4), websocket.next())
         .await
         .expect("mihomo WebSocket did not produce a JSON frame")

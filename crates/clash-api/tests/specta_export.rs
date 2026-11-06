@@ -48,7 +48,7 @@ impl Format for AppLikeFormat {
 
 #[test]
 fn connection_exports_with_named_typed_extra() {
-    let types = Types::default().register::<chimera_clash_api::Connection>();
+    let types = Types::default().register::<clash_api::Connection>();
     let ts = specta_typescript::Typescript::default()
         .export(&types, AppLikeFormat::new())
         .expect("Connection and ConnectionMetadata must export despite their extra maps");

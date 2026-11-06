@@ -1,7 +1,7 @@
 //! Parse/drop timing with the system allocator; run separately from DHAT probes.
 use std::{hint::black_box, time::Instant};
 
-use chimera_clash_api::ConnectionsSnapshot;
+use clash_api::ConnectionsSnapshot;
 use serde_json::json;
 
 fn main() {

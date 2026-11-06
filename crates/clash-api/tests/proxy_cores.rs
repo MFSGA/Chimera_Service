@@ -1,6 +1,6 @@
 //! Read-only group discovery against explicitly supplied local core binaries.
 //! Run with MIHOMO_BIN, MEOW_BIN and CLASH_RS_BIN; no downloads or system proxy changes.
-use chimera_clash_api::{Client, Host, ProxyName};
+use clash_api::{Client, Host, ProxyName};
 use std::{
     collections::BTreeSet,
     process::{Child, Command, Stdio},

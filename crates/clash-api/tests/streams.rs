@@ -8,7 +8,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
-use chimera_clash_api::{
+use clash_api::{
     Client, ConnectionStreamQuery, Host, LogLevel, LogQuery, StructuredLogLevel,
 };
 use chrono::NaiveTime;
@@ -167,7 +167,7 @@ async fn websocket_controls_binary_decode_errors_and_close_are_typed() {
     tokio::time::timeout(Duration::from_secs(2), async {
         assert!(matches!(
             stream.next().await,
-            Some(Err(chimera_clash_api::Error::Decode {
+            Some(Err(clash_api::Error::Decode {
                 operation: "traffic_ws",
                 ..
             }))
@@ -214,7 +214,7 @@ async fn websocket_rejects_invalid_upgrade_headers() {
         let client = Client::new_http(address).unwrap();
         assert!(matches!(
             client.traffic_ws().await,
-            Err(chimera_clash_api::Error::WebSocket {
+            Err(clash_api::Error::WebSocket {
                 operation: "traffic_ws",
                 ..
             })
@@ -265,7 +265,7 @@ fn common_connections_preserve_absence_unknown_enums_and_extensions() {
             "newConnectionField": true
         }]
     });
-    let snapshot: chimera_clash_api::ConnectionsSnapshot = serde_json::from_value(input).unwrap();
+    let snapshot: clash_api::ConnectionsSnapshot = serde_json::from_value(input).unwrap();
     assert_eq!(snapshot.memory, None);
     let connection = &snapshot.connections.as_ref().unwrap()[0];
     assert_eq!(connection.provider_chains, None);
@@ -274,7 +274,7 @@ fn common_connections_preserve_absence_unknown_enums_and_extensions() {
     assert_eq!(metadata.known.destination_port, Some(443));
     assert_eq!(metadata.known.process_path, None);
     assert!(
-        matches!(&metadata.known.network, Some(chimera_clash_api::ConfigEnum::Unknown(value)) if value == "future-network")
+        matches!(&metadata.known.network, Some(clash_api::ConfigEnum::Unknown(value)) if value == "future-network")
     );
     let serialized = serde_json::to_value(connection).unwrap();
     assert_eq!(serialized["metadata"]["type"], "FutureInbound");
@@ -293,28 +293,28 @@ fn common_connections_preserve_absence_unknown_enums_and_extensions() {
         serde_json::json!("invalid"),
     ] {
         assert!(
-            serde_json::from_value::<chimera_clash_api::ConnectionMetadata>(
+            serde_json::from_value::<clash_api::ConnectionMetadata>(
                 serde_json::json!({"sourcePort": port})
             )
             .is_err()
         );
     }
-    let log: chimera_clash_api::LogEntry =
+    let log: clash_api::LogEntry =
         serde_json::from_str(r#"{"type":"trace","payload":"hello"}"#).unwrap();
     assert_eq!(log.level.as_str(), "trace");
-    let memory: chimera_clash_api::Memory = serde_json::from_str(r#"{"inuse":12}"#).unwrap();
+    let memory: clash_api::Memory = serde_json::from_str(r#"{"inuse":12}"#).unwrap();
     assert_eq!(memory.os_limit, 0);
 }
 
 #[test]
 fn decimal_string_samples_keep_the_existing_controller_compatibility() {
-    let memory: chimera_clash_api::Memory =
+    let memory: clash_api::Memory =
         serde_json::from_str(r#"{"inuse":"12","oslimit":"24"}"#).unwrap();
     assert_eq!(memory.in_use, 12);
     assert_eq!(memory.os_limit, 24);
-    let traffic: chimera_clash_api::Traffic =
+    let traffic: clash_api::Traffic =
         serde_json::from_str(r#"{"up":"3","down":"4"}"#).unwrap();
     assert_eq!(traffic.up.get(), 3);
     assert_eq!(traffic.down.get(), 4);
-    assert!(serde_json::from_str::<chimera_clash_api::Memory>(r#"{"inuse":"invalid"}"#).is_err());
+    assert!(serde_json::from_str::<clash_api::Memory>(r#"{"inuse":"invalid"}"#).is_err());
 }
