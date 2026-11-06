@@ -8,10 +8,8 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
-use clash_api::{
-    Client, ConnectionStreamQuery, Host, LogLevel, LogQuery, StructuredLogLevel,
-};
 use chrono::NaiveTime;
+use clash_api::{Client, ConnectionStreamQuery, Host, LogLevel, LogQuery, StructuredLogLevel};
 use futures_util::StreamExt;
 use indexmap::IndexMap;
 
@@ -312,8 +310,7 @@ fn decimal_string_samples_keep_the_existing_controller_compatibility() {
         serde_json::from_str(r#"{"inuse":"12","oslimit":"24"}"#).unwrap();
     assert_eq!(memory.in_use, 12);
     assert_eq!(memory.os_limit, 24);
-    let traffic: clash_api::Traffic =
-        serde_json::from_str(r#"{"up":"3","down":"4"}"#).unwrap();
+    let traffic: clash_api::Traffic = serde_json::from_str(r#"{"up":"3","down":"4"}"#).unwrap();
     assert_eq!(traffic.up.get(), 3);
     assert_eq!(traffic.down.get(), 4);
     assert!(serde_json::from_str::<clash_api::Memory>(r#"{"inuse":"invalid"}"#).is_err());

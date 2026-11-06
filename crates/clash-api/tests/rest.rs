@@ -276,14 +276,8 @@ async fn rule_providers_preserve_missing_metadata_unknown_strings_and_order() {
         Some(clash_api::RuleProviderBehavior::IpCidr)
     );
     assert_eq!(known.format, Some(clash_api::RuleFormat::MrsRule));
-    assert_eq!(
-        known.provider_type,
-        Some(clash_api::ProviderType::Rule)
-    );
-    assert_eq!(
-        known.vehicle_type,
-        Some(clash_api::VehicleType::Http)
-    );
+    assert_eq!(known.provider_type, Some(clash_api::ProviderType::Rule));
+    assert_eq!(known.vehicle_type, Some(clash_api::VehicleType::Http));
     server.abort();
 }
 
@@ -312,10 +306,7 @@ async fn config_reads_preserve_absence_and_unknown_response_enums() {
 
 #[test]
 fn config_response_validation_does_not_widen_writes_or_subscriptions() {
-    assert!(
-        serde_json::from_str::<clash_api::ConfigPatch>(r#"{"mode":"future-mode"}"#)
-            .is_err()
-    );
+    assert!(serde_json::from_str::<clash_api::ConfigPatch>(r#"{"mode":"future-mode"}"#).is_err());
     assert!(serde_json::from_str::<clash_api::LogLevel>(r#""trace""#).is_err());
     for value in [
         serde_json::json!({"mode":42}),
@@ -331,15 +322,11 @@ fn config_response_validation_does_not_widen_writes_or_subscriptions() {
         serde_json::from_value(serde_json::json!({"mode":"rule","log-level":"info"})).unwrap();
     assert_eq!(
         known.mode,
-        Some(clash_api::ConfigEnum::Known(
-            clash_api::TunnelMode::Rule
-        ))
+        Some(clash_api::ConfigEnum::Known(clash_api::TunnelMode::Rule))
     );
     assert_eq!(
         known.log_level,
-        Some(clash_api::ConfigEnum::Known(
-            clash_api::LogLevel::Info
-        ))
+        Some(clash_api::ConfigEnum::Known(clash_api::LogLevel::Info))
     );
 }
 

@@ -1,6 +1,4 @@
-use clash_api::{
-    BytesPerSecond, ProviderType, RuleFormat, RuleProviderBehavior, VehicleType,
-};
+use clash_api::{BytesPerSecond, ProviderType, RuleFormat, RuleProviderBehavior, VehicleType};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 #[derive(Deserialize, Serialize)]

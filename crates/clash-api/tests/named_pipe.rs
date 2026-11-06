@@ -248,11 +248,7 @@ async fn exhausted_pipe_budget_does_not_enter_the_business_retry_policy() {
             Box::new(std::iter::repeat(Duration::ZERO))
         }
 
-        fn is_retryable(
-            &self,
-            _: &clash_api::RequestMetadata,
-            _: &clash_api::Error,
-        ) -> bool {
+        fn is_retryable(&self, _: &clash_api::RequestMetadata, _: &clash_api::Error) -> bool {
             panic!("pipe contention must not receive another retry budget");
         }
     }

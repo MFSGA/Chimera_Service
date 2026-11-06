@@ -82,8 +82,7 @@ async fn traffic_ws_decodes_a_typed_frame() {
         .build()
         .unwrap();
 
-    let mut websocket: clash_api::WebSocketStream<Traffic> =
-        client.traffic_ws().await.unwrap();
+    let mut websocket: clash_api::WebSocketStream<Traffic> = client.traffic_ws().await.unwrap();
     let traffic = websocket.next().await.unwrap().unwrap();
 
     assert_eq!(traffic.up.get(), 1);
