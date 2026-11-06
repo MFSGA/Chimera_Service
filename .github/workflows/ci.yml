@@ -14,7 +14,11 @@ on:
       - main
       - dev
 
-# Down scope as necessary via https://docs.github.com/en/actions/security-guides/automatic-token-authentication#modifying-the-permissions-for-the-github_token
+# Serialize runs per ref so auto-fix commits cannot race a newer checkout.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   checks: write
   contents: write
@@ -47,7 +51,9 @@ jobs:
       # Install your linters here
       - name: Clippy
         run: cargo clippy --all-targets --all-features
+      # Keep the commit-producing formatter to a single matrix job.
       - name: Run linters
+        if: matrix.os == 'ubuntu-latest'
         uses: wearerequired/lint-action@master
         with:
           rustfmt: true
