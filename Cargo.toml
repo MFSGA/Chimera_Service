@@ -1,6 +1,8 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/chimera-serde",
+    "crates/chimera-serde-derive",
     "chimera_service",
     "chimera_ipc",
     "crates/clash-api",
