@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, path::PathBuf, sync::OnceLock};
+use std::{collections::BTreeSet, ffi::OsString, path::PathBuf, sync::OnceLock};
 
 #[cfg(windows)]
 use anyhow::Context;
@@ -28,6 +28,15 @@ pub struct ServerContext {
 
 pub static SHUTDOWN_TOKEN: OnceLock<CancellationToken> = OnceLock::new();
 
+/// Extract only names, as in the upstream Service runtime. Keeping the
+/// projection pure makes it testable without changing process environment.
+fn environment_names(pairs: impl IntoIterator<Item = (OsString, OsString)>) -> BTreeSet<String> {
+    pairs
+        .into_iter()
+        .map(|(name, _)| name.to_string_lossy().into_owned())
+        .collect()
+}
+
 pub async fn server_inner(
     ctx: ServerContext,
     token: CancellationToken,
@@ -41,9 +50,10 @@ pub async fn server_inner(
     tracing::info!("nyanpasu config dir: {:?}", ctx.nyanpasu_config_dir);
     tracing::info!("nyanpasu data dir: {:?}", ctx.nyanpasu_data_dir);
 
-    // Print current envs
-    let envs: BTreeMap<String, String> = std::env::vars().collect();
-    tracing::info!(environments = ?envs, "collected current envs.");
+    // Upstream daemon rule: service logs are exposed to local IPC users, so
+    // record environment *names* only, never proxy passwords, tokens or keys.
+    let env_names = environment_names(std::env::vars_os());
+    tracing::info!(environment_names = ?env_names, "collected current env names.");
 
     // check dirs accessibility
     let nyanpasu_config_dir = dunce::canonicalize(&ctx.nyanpasu_config_dir)?;
@@ -108,4 +118,35 @@ pub async fn server(ctx: ServerContext) -> Result<(), CommandError> {
     SHUTDOWN_TOKEN.set(token.clone()).unwrap();
     server_inner(ctx, token).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn service_environment_logs_never_contain_secret_values() {
+        let names = environment_names([
+            (
+                OsString::from("HTTP_PROXY"),
+                OsString::from("https://user:password@example.com"),
+            ),
+            (
+                OsString::from("SERVICE_TOKEN"),
+                OsString::from("sensitive-token"),
+            ),
+            (
+                OsString::from("SERVICE_TOKEN"),
+                OsString::from("another-secret"),
+            ),
+        ]);
+        assert_eq!(
+            names,
+            BTreeSet::from(["HTTP_PROXY".into(), "SERVICE_TOKEN".into()])
+        );
+        let output = format!("{names:?}");
+        assert!(!output.contains("password"));
+        assert!(!output.contains("sensitive-token"));
+        assert!(!output.contains("another-secret"));
+    }
 }

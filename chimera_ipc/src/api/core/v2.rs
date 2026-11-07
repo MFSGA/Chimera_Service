@@ -244,7 +244,11 @@ mod tests {
             serde_json::from_str::<CoreType>(r#"{"clash":"chimera_client_alpha"}"#).unwrap(),
             alpha
         );
-        assert_eq!(alpha.get_executable_name(), "chimera-client-alpha");
+        // Wire identity is stable, while the executable name is platform-specific.
+        assert_eq!(
+            alpha.get_executable_name(),
+            format!("chimera-client-alpha{}", std::env::consts::EXE_SUFFIX)
+        );
     }
 
     #[test]

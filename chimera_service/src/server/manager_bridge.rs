@@ -1718,13 +1718,18 @@ mod tests {
         let root = tempfile::tempdir().expect("tempdir");
         let infos = test_infos(root.path());
         std::fs::create_dir_all(&infos.nyanpasu_app_dir).unwrap();
-        let stable = infos.nyanpasu_app_dir.join("chimera-client");
-        let alpha = infos.nyanpasu_app_dir.join("chimera-client-alpha");
-        std::fs::write(&stable, b"").unwrap();
-        std::fs::write(&alpha, b"").unwrap();
-
         let stable_type = CoreType::Clash(ClashCoreType::ChimeraClient);
         let alpha_type = CoreType::Clash(ClashCoreType::ChimeraClientAlpha);
+        // Runtime CoreType supplies the platform executable suffix. A fixture
+        // without .exe on Windows cannot exercise real sidecar discovery.
+        let stable = infos
+            .nyanpasu_app_dir
+            .join(stable_type.get_executable_name());
+        let alpha = infos
+            .nyanpasu_app_dir
+            .join(alpha_type.get_executable_name());
+        std::fs::write(&stable, b"").unwrap();
+        std::fs::write(&alpha, b"").unwrap();
 
         assert_eq!(core_kind(&alpha_type).unwrap(), CoreKind::ChimeraClient);
         assert_eq!(find_binary_path(&infos, &stable_type).unwrap(), stable);
