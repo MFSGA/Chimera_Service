@@ -1,29 +1,35 @@
 
-## [1.11.1] - 2026-11-05 03:33:18
+## [1.11.2] - 2026-11-08 17:36:48
 
 
 ### ✨ Features
 
-- **runtime:** Wire native-store leases and stop strategy into core lifecycle by @MFSGA 
+- **clash-api:** Support usefull api crate in runtime for tauri by @MFSGA 
 
-- **runtime:** Add native store and supervised process foundations by @MFSGA 
+- **reqwest:** Add the vendor for serde by @MFSGA 
+
+- **serde:** Add the two crates for clash-api by @MFSGA 
+
+
+### 🐛 Bug Fixes
+
+- **clash:** Replace the crate name by @MFSGA 
+
+
+### 🔨 Refactor
+
+- **service:** Align upstream graceful shutdown and redact environment logs by @MFSGA 
 
 
 ### 🧹 Miscellaneous Tasks
 
-- **deps:** Update renovatebot/github-action action to v46.3.12 ([#112](https://github.com/MFSGA/Chimera_Service/issues/112)) by @MFSGA 
-
-- **deps:** Update rust crate tokio to v1.54.1 (#99) by @MFSGA  in [#99](https://github.com/MFSGA/Chimera_Service/pull/99)
-
-- **deps:** Update cargo-bins/cargo-binstall action to v1.26.2 (#111) by @MFSGA  in [#111](https://github.com/MFSGA/Chimera_Service/pull/111)
-
-- **runtime:** Remove unused Nyanpasu crates by @MFSGA 
+- Apply linting fixes with rustfmt by @MFSGA 
 
 -----------------
 
 
 
-**Full Changelog**: https://github.com/MFSGA/Chimera_Service/compare/v1.11.0...v1.11.1
+**Full Changelog**: https://github.com/MFSGA/Chimera_Service/compare/v1.11.1...v1.11.2
 
 
 
