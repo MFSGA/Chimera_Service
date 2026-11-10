@@ -291,6 +291,45 @@ impl<'a> Client<'a> {
         response.ok()?;
         Ok(())
     }
+
+    pub async fn reconcile_transparent_proxy(
+        &self,
+        payload: &api::network::transparent_proxy::NetworkTransparentProxyRequest,
+    ) -> Result<'_, api::network::transparent_proxy::NetworkTransparentProxyStatus> {
+        let payload = simd_json::serde::to_string(payload)?;
+        let request = Request::post(
+            api::network::transparent_proxy::NETWORK_TRANSPARENT_PROXY_RECONCILE_ENDPOINT,
+        )
+        .header(CONTENT_TYPE, "application/json")
+        .body(Body::from(payload))?;
+        let response = send_request(&self.0, request)
+            .await?
+            .cast_body::<api::network::transparent_proxy::NetworkTransparentProxyReconcileRes>()
+            .await?
+            .ok()?;
+        response.data.ok_or_else(|| {
+            ClientError::Other(anyhow::anyhow!(
+                "empty transparent proxy reconcile response"
+            ))
+        })
+    }
+
+    pub async fn transparent_proxy_status(
+        &self,
+    ) -> Result<'_, api::network::transparent_proxy::NetworkTransparentProxyStatus> {
+        let request = Request::get(
+            api::network::transparent_proxy::NETWORK_TRANSPARENT_PROXY_STATUS_ENDPOINT,
+        )
+        .body(Empty::<Bytes>::new())?;
+        let response = send_request(&self.0, request)
+            .await?
+            .cast_body::<api::network::transparent_proxy::NetworkTransparentProxyStatusRes>()
+            .await?
+            .ok()?;
+        response.data.ok_or_else(|| {
+            ClientError::Other(anyhow::anyhow!("empty transparent proxy status response"))
+        })
+    }
 }
 
 fn decode_event(bytes: &[u8]) -> Result<'static, api::ws::events::Event> {
