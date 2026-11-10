@@ -25,6 +25,11 @@ pub enum ClientError<'a> {
     Hyper(#[from] hyper::Error),
     #[error("An error occurred while perform HTTP: {0}")]
     Http(#[from] hyper::http::Error),
+    #[error("The service returned HTTP status {status}: {message}")]
+    HttpStatus {
+        status: hyper::http::StatusCode,
+        message: String,
+    },
     #[error("An error occurred: {0}")]
     ParseFailed(#[from] simd_json::Error),
     #[error("IPC WebSocket `{operation}` failed: {source}")]
@@ -135,10 +140,10 @@ where
             let r = res.cast_body::<crate::api::R<Option<()>>>().await?;
             return Err(ClientError::ServerResponseFailed(r));
         }
-        return Err(ClientError::Other(anyhow::anyhow!(
-            "Received an error response: {:#?}",
-            response
-        )));
+        return Err(ClientError::HttpStatus {
+            status: response.status(),
+            message: format!("{response:#?}"),
+        });
     }
     Ok(Response { response })
 }
