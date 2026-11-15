@@ -30,7 +30,9 @@ use crate::{
     },
     runtime_store::{RuntimeConfigStore, RuntimeDirectoryLock, StagedRuntimeConfig},
     spec::{InstanceSpec, LocalIpcPolicy, ManagerOptions, ResolvedController},
-    state::{ConfigRevision, CoreState, CoreStatus, InstanceStatus, StopReason},
+    state::{
+        ConfigRevision, CoreOwner, CoreState, CoreStatus, InstanceState, InstanceStatus, StopReason,
+    },
 };
 
 use publish::instance_core_state;
@@ -566,12 +568,67 @@ impl CoreManager {
     /// the number of possibly live processes; it does not clear quarantine.
     pub async fn stop(&self) -> Result<(), Error> {
         let mut ctrl = self.inner.ctrl.lock().await;
+        self.stop_locked(&mut ctrl).await
+    }
+
+    /// Stop the observed process only if both its process identity and applied
+    /// revision are still current. The manager lock serializes manager
+    /// commands; the instance supervisor closes the separate auto-respawn
+    /// window while DNS is restored and restarts are cancelled.
+    pub async fn stop_if_owner(&self, expected: CoreOwner) -> Result<(), Error> {
+        let mut ctrl = self.inner.ctrl.lock().await;
+        let Some(active) = ctrl.current.take() else {
+            return Ok(());
+        };
+        let snapshot = active.instance.state().borrow().clone();
+        let actual = snapshot.instance_id.map(|instance_id| CoreOwner {
+            instance_id,
+            revision: active.plan.revision.id(),
+        });
+        let InstanceState::Running { pid } = snapshot.state else {
+            ctrl.current = Some(active);
+            return Err(Error::OwnerConflict { expected, actual });
+        };
+        if actual.as_ref() != Some(&expected) {
+            ctrl.current = Some(active);
+            return Err(Error::OwnerConflict { expected, actual });
+        }
+        let before_cancel = Box::pin(async { self.dns_restore(&mut ctrl).await });
+        match active
+            .instance
+            .cancel_if_owner(expected.instance_id, pid, before_cancel)
+            .await
+        {
+            Ok(true) => self.stop_active_locked(&mut ctrl, active).await,
+            Ok(false) => Err({
+                let error = Error::OwnerConflict {
+                    expected,
+                    // The supervisor no longer identifies the observed
+                    // process, and its latest UUID may not have reached the
+                    // status watch yet.
+                    actual: None,
+                };
+                ctrl.current = Some(active);
+                error
+            }),
+            Err(error) => {
+                ctrl.current = Some(active);
+                Err(error)
+            }
+        }
+    }
+
+    async fn stop_locked(&self, ctrl: &mut Ctrl) -> Result<(), Error> {
         // Restore at the head of the stop transaction: resolution must never
         // point at a core that is being torn down.
-        self.dns_restore(&mut ctrl).await?;
+        self.dns_restore(ctrl).await?;
         let Some(active) = ctrl.current.take() else {
             return Err(Error::NotStarted);
         };
+        self.stop_active_locked(ctrl, active).await
+    }
+
+    async fn stop_active_locked(&self, ctrl: &mut Ctrl, active: Active) -> Result<(), Error> {
         let Active {
             instance,
             forwarder,
@@ -590,7 +647,7 @@ impl CoreManager {
                 .await
             {
                 if matches!(error, Error::StopUnconfirmed(_)) {
-                    return Err(self.latch_quarantine(&mut ctrl, epoch, error));
+                    return Err(self.latch_quarantine(ctrl, epoch, error));
                 }
                 return Err(error);
             }
@@ -608,7 +665,7 @@ impl CoreManager {
             .await
         {
             if matches!(error, Error::StopUnconfirmed(_)) {
-                return Err(self.latch_quarantine(&mut ctrl, epoch, error));
+                return Err(self.latch_quarantine(ctrl, epoch, error));
             }
             self.publish_terminal_error(&error);
             return Err(error);
@@ -871,19 +928,106 @@ fn spawn_forwarder(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::Duration,
+    };
 
-    use super::{CoreManager, EpochAllocator, EpochPlan};
+    use super::{Active, CoreManager, EpochAllocator, EpochPlan};
     use crate::{
         Feature, RuntimeFeature,
         epoch::epoch,
         kind::CoreKind,
+        probe::{ProbePhase, ProbeResult},
+        runtime::{BoxFuture, RuntimeInstance},
         spec::{CoreSpec, InstanceOptions, InstanceSpec, ManagerOptions, ResolvedController},
-        state::ConfigRevision,
+        state::{ConfigRevision, CoreOwner, InstanceState, InstanceStatus},
     };
     use camino::Utf8PathBuf;
     use enumset::EnumSet;
     use serde_yaml_ng::Mapping;
+    use tokio::sync::watch;
+
+    struct FenceRuntimeInstance {
+        epoch: crate::Epoch,
+        spec: InstanceSpec,
+        controller: ResolvedController,
+        state: watch::Receiver<InstanceStatus>,
+        state_tx: watch::Sender<InstanceStatus>,
+        stop_calls: Arc<AtomicUsize>,
+        replacement_during_before_cancel: Option<(uuid::Uuid, u32)>,
+    }
+
+    impl RuntimeInstance for FenceRuntimeInstance {
+        fn epoch(&self) -> crate::Epoch {
+            self.epoch
+        }
+
+        fn spec(&self) -> &InstanceSpec {
+            &self.spec
+        }
+
+        fn controller(&self) -> &ResolvedController {
+            &self.controller
+        }
+
+        fn pid(&self) -> Option<u32> {
+            Some(7)
+        }
+
+        fn state(&self) -> watch::Receiver<InstanceStatus> {
+            self.state.clone()
+        }
+
+        fn wait_ready<'a>(&'a self) -> BoxFuture<'a, Result<(), crate::Error>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn probe_now<'a>(&'a self, _phase: ProbePhase) -> BoxFuture<'a, ProbeResult> {
+            Box::pin(async { ProbeResult::Healthy })
+        }
+
+        fn cancel_if_owner<'a>(
+            &'a self,
+            instance_id: uuid::Uuid,
+            pid: u32,
+            before_cancel: BoxFuture<'a, Result<(), crate::Error>>,
+        ) -> BoxFuture<'a, Result<bool, crate::Error>> {
+            let state = self.state.clone();
+            let state_tx = self.state_tx.clone();
+            let replacement = self.replacement_during_before_cancel;
+            Box::pin(async move {
+                let matches = |status: &InstanceStatus| {
+                    status.instance_id == Some(instance_id)
+                        && matches!(status.state, InstanceState::Running { pid: current } if current == pid)
+                };
+                if !matches(&state.borrow()) {
+                    return Ok(false);
+                }
+                before_cancel.await?;
+                if let Some((replacement_id, replacement_pid)) = replacement {
+                    state_tx.send_modify(|status| {
+                        status.instance_id = Some(replacement_id);
+                        status.state = InstanceState::Running {
+                            pid: replacement_pid,
+                        };
+                    });
+                }
+                Ok(matches(&state.borrow()))
+            })
+        }
+
+        fn stop_and_confirm_dead(
+            self: Box<Self>,
+            _timeout: Duration,
+        ) -> BoxFuture<'static, Result<(), crate::Error>> {
+            self.stop_calls.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Ok(()) })
+        }
+    }
 
     #[test]
     fn epochs_are_monotone_past_the_seed_and_never_zero() {
@@ -932,6 +1076,218 @@ mod tests {
             !runtime_config.exists(),
             "stale runtime configuration should be swept"
         );
+        manager.shutdown().await.unwrap();
+    }
+
+    /// Initial state: the manager has one running instance/revision. Operation:
+    /// try a stale process token, then the exact token. Observation: only the
+    /// exact token reaches `stop_and_confirm_dead`; a regression that compares
+    /// after releasing the manager lock could stop a replacement core.
+    #[tokio::test]
+    async fn stop_if_owner_leaves_a_replacement_running() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
+        let manager = CoreManager::new(ManagerOptions {
+            runtime_dir: Some(root.join("runtime")),
+            log_sink_enabled: false,
+            ..ManagerOptions::default()
+        })
+        .await
+        .unwrap();
+        let epoch = epoch(1);
+        let instance_id = uuid::Uuid::new_v4();
+        let revision = crate::RevisionId {
+            epoch,
+            generation: 1,
+            effective_hash: "effective".into(),
+        };
+        let spec = InstanceSpec {
+            core: CoreSpec {
+                kind: CoreKind::Mihomo,
+                binary_path: root.join("mihomo"),
+                version: Some("test".into()),
+                features: Vec::new(),
+            },
+            config_path: root.join("source.yaml"),
+            working_dir: root.clone(),
+            pid_file: None,
+            options: InstanceOptions::default(),
+        };
+        let controller = ResolvedController {
+            host: crate::Host::url("http://127.0.0.1:9090").unwrap(),
+            secret: None,
+        };
+        let plan = EpochPlan {
+            source_spec: spec.clone(),
+            effective_spec: spec.clone(),
+            controller: controller.clone(),
+            revision: ConfigRevision {
+                epoch,
+                generation: 1,
+                source_hash: "source".into(),
+                effective_hash: "effective".into(),
+                runtime_path: root.join("runtime/config-1.yaml"),
+            },
+            capabilities: EnumSet::<Feature>::new(),
+            runtime_features: EnumSet::<RuntimeFeature>::new(),
+            source_document: Mapping::new(),
+            effective_document: Arc::new(Mapping::new()),
+        };
+        let (state_tx, state) = watch::channel(InstanceStatus {
+            instance_id: Some(instance_id),
+            state: InstanceState::Running { pid: 7 },
+            health: None,
+        });
+        let stop_calls = Arc::new(AtomicUsize::new(0));
+        let runtime = FenceRuntimeInstance {
+            epoch,
+            spec,
+            controller,
+            state,
+            state_tx,
+            stop_calls: stop_calls.clone(),
+            replacement_during_before_cancel: None,
+        };
+        let forwarder = tokio::spawn(std::future::pending::<()>());
+        manager.inner.ctrl.lock().await.current = Some(Active {
+            instance: Box::new(runtime),
+            forwarder,
+            plan,
+        });
+
+        let stale = CoreOwner {
+            instance_id: uuid::Uuid::new_v4(),
+            revision: revision.clone(),
+        };
+        let error = manager
+            .stop_if_owner(stale)
+            .await
+            .expect_err("a different instance must fail the owner fence");
+        assert!(matches!(error, crate::Error::OwnerConflict { .. }));
+        assert!(manager.inner.ctrl.lock().await.current.is_some());
+        assert_eq!(stop_calls.load(Ordering::SeqCst), 0);
+
+        let stale_revision = CoreOwner {
+            instance_id,
+            revision: crate::RevisionId {
+                generation: 2,
+                ..revision.clone()
+            },
+        };
+        let error = manager
+            .stop_if_owner(stale_revision)
+            .await
+            .expect_err("the same process with another revision must fail the owner fence");
+        assert!(matches!(error, crate::Error::OwnerConflict { .. }));
+        assert!(manager.inner.ctrl.lock().await.current.is_some());
+        assert_eq!(stop_calls.load(Ordering::SeqCst), 0);
+
+        manager
+            .stop_if_owner(CoreOwner {
+                instance_id,
+                revision,
+            })
+            .await
+            .unwrap();
+        assert!(manager.inner.ctrl.lock().await.current.is_none());
+        assert_eq!(stop_calls.load(Ordering::SeqCst), 1);
+        manager.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn stop_if_owner_does_not_stop_a_respawn_during_pre_stop_work() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
+        let manager = CoreManager::new(ManagerOptions {
+            runtime_dir: Some(root.join("runtime")),
+            log_sink_enabled: false,
+            ..ManagerOptions::default()
+        })
+        .await
+        .unwrap();
+        let epoch = epoch(1);
+        let instance_id = uuid::Uuid::new_v4();
+        let revision = crate::RevisionId {
+            epoch,
+            generation: 1,
+            effective_hash: "effective".into(),
+        };
+        let spec = InstanceSpec {
+            core: CoreSpec {
+                kind: CoreKind::Mihomo,
+                binary_path: root.join("mihomo"),
+                version: Some("test".into()),
+                features: Vec::new(),
+            },
+            config_path: root.join("source.yaml"),
+            working_dir: root.clone(),
+            pid_file: None,
+            options: InstanceOptions::default(),
+        };
+        let controller = ResolvedController {
+            host: crate::Host::url("http://127.0.0.1:9090").unwrap(),
+            secret: None,
+        };
+        let plan = EpochPlan {
+            source_spec: spec.clone(),
+            effective_spec: spec.clone(),
+            controller: controller.clone(),
+            revision: ConfigRevision {
+                epoch,
+                generation: 1,
+                source_hash: "source".into(),
+                effective_hash: "effective".into(),
+                runtime_path: root.join("runtime/config-1.yaml"),
+            },
+            capabilities: EnumSet::<Feature>::new(),
+            runtime_features: EnumSet::<RuntimeFeature>::new(),
+            source_document: Mapping::new(),
+            effective_document: Arc::new(Mapping::new()),
+        };
+        let (state_tx, state) = watch::channel(InstanceStatus {
+            instance_id: Some(instance_id),
+            state: InstanceState::Running { pid: 7 },
+            health: None,
+        });
+        let replacement_id = uuid::Uuid::new_v4();
+        let stop_calls = Arc::new(AtomicUsize::new(0));
+        let runtime = FenceRuntimeInstance {
+            epoch,
+            spec,
+            controller,
+            state,
+            state_tx,
+            stop_calls: stop_calls.clone(),
+            replacement_during_before_cancel: Some((replacement_id, 8)),
+        };
+        let forwarder = tokio::spawn(std::future::pending::<()>());
+        manager.inner.ctrl.lock().await.current = Some(Active {
+            instance: Box::new(runtime),
+            forwarder,
+            plan,
+        });
+
+        let error = manager
+            .stop_if_owner(CoreOwner {
+                instance_id,
+                revision,
+            })
+            .await
+            .expect_err("a respawned owner must not be stopped using the prior token");
+        assert!(matches!(error, crate::Error::OwnerConflict { .. }));
+        let status = {
+            let ctrl = manager.inner.ctrl.lock().await;
+            ctrl.current
+                .as_ref()
+                .unwrap()
+                .instance
+                .state()
+                .borrow()
+                .clone()
+        };
+        assert_eq!(status.instance_id, Some(replacement_id));
+        assert_eq!(status.state, InstanceState::Running { pid: 8 });
+        assert_eq!(stop_calls.load(Ordering::SeqCst), 0);
         manager.shutdown().await.unwrap();
     }
 

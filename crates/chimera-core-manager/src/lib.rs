@@ -54,6 +54,6 @@ pub use spec::{
     ManagerOptions, ResolvedController,
 };
 pub use state::{
-    ConfigRevision, CoreState, CoreStatus, HealthState, HealthStatus, InstanceState,
+    ConfigRevision, CoreOwner, CoreState, CoreStatus, HealthState, HealthStatus, InstanceState,
     InstanceStatus, RevisionId, SpecSummary, StopReason,
 };

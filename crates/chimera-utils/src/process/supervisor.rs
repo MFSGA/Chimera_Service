@@ -1,5 +1,6 @@
 use std::{
     collections::VecDeque,
+    future::Future,
     sync::{
         Arc,
         atomic::{AtomicU32, AtomicU64, Ordering},
@@ -247,6 +248,35 @@ impl Supervisor {
         }
     }
 
+    /// Prevents respawn only while the expected child is still the current
+    /// live process. `before_cancel` runs while the supervisor's current-child
+    /// lock is held, so the monitor cannot replace that child between the
+    /// owner check and cancellation.
+    pub async fn cancel_if_current<E, F, Fut>(
+        &self,
+        expected_pid: u32,
+        owner_matches: F,
+        before_cancel: impl FnOnce() -> Fut,
+    ) -> Result<bool, E>
+    where
+        F: FnOnce() -> bool,
+        Fut: Future<Output = Result<(), E>>,
+    {
+        if self.token.is_cancelled() {
+            return Ok(false);
+        }
+        let current = self.current.lock().await;
+        let matches = current.as_ref().is_some_and(|handle| {
+            handle.pid() == expected_pid && handle.terminated.borrow().is_none()
+        });
+        if !matches || !owner_matches() {
+            return Ok(false);
+        }
+        before_cancel().await?;
+        self.token.cancel();
+        Ok(true)
+    }
+
     /// Cancels restarts, gracefully kills the current child, and waits for the
     /// supervision loop to end.
     pub async fn stop(mut self) -> Result<(), ProcessError> {
@@ -385,8 +415,11 @@ impl SupervisorBuilder {
         if matches!(self.readiness, ReadinessProbe::Acknowledged) {
             ready_pending.store(first_pid, Ordering::SeqCst);
         }
-        emit(SupervisorEvent::Started { pid: first_pid });
-        *current.lock().await = Some(first_handle);
+        {
+            let mut current = current.lock().await;
+            *current = Some(first_handle);
+            emit(SupervisorEvent::Started { pid: first_pid });
+        }
 
         let preparation = self.preparation;
         let factory = self.factory;
@@ -556,13 +589,16 @@ impl SupervisorBuilder {
                 match (factory)().spawn().await {
                     Ok((handle, rx)) => {
                         let pid = handle.pid();
-                        *current_.lock().await = Some(handle);
                         next_rx = Some(rx);
-                        if !token_.is_cancelled() {
-                            if matches!(readiness, ReadinessProbe::Acknowledged) {
-                                ready_pending_.store(pid, Ordering::SeqCst);
+                        {
+                            let mut current = current_.lock().await;
+                            *current = Some(handle);
+                            if !token_.is_cancelled() {
+                                if matches!(readiness, ReadinessProbe::Acknowledged) {
+                                    ready_pending_.store(pid, Ordering::SeqCst);
+                                }
+                                emit(SupervisorEvent::Started { pid });
                             }
-                            emit(SupervisorEvent::Started { pid });
                         }
                     }
                     Err(error) => {
@@ -587,6 +623,100 @@ impl SupervisorBuilder {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    #[ignore = "spawned as the child by cancel_if_current_serializes_respawn_during_pre_stop"]
+    fn cancel_if_current_test_child() {
+        let marker = std::env::var_os("CHIMERA_SUPERVISOR_EXIT_MARKER")
+            .expect("the parent test supplies an exit marker");
+        std::thread::sleep(Duration::from_millis(100));
+        std::fs::write(marker, b"exited").expect("write child exit marker");
+        std::process::exit(1);
+    }
+
+    // Contract: with a live supervised child, owner validation starts pre-stop
+    // work once. If that child exits during the callback, the supervisor must
+    // not publish a replacement before cancellation completes. Releasing the
+    // current-child lock before the callback makes the Started assertion fail.
+    #[tokio::test]
+    async fn cancel_if_current_serializes_respawn_during_pre_stop() {
+        let executable = std::env::current_exe().expect("test executable");
+        let temp = tempfile::tempdir().expect("temporary test directory");
+        let marker = temp.path().join("child-exited");
+        let marker_for_child = marker.clone();
+        let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+        let supervisor = Supervisor::builder(move || {
+            Command::new(&executable)
+                .args([
+                    "--exact",
+                    "process::supervisor::tests::cancel_if_current_test_child",
+                    "--ignored",
+                ])
+                .env("CHIMERA_SUPERVISOR_EXIT_MARKER", &marker_for_child)
+                .kill_grace(Duration::from_millis(10))
+        })
+        .restart_policy(RestartPolicy::OnFailure { max_restarts: 2 })
+        .backoff(Backoff::exponential(BackoffRange {
+            initial: Duration::from_millis(1),
+            max: Duration::from_millis(1),
+        }))
+        .readiness(ReadinessProbe::Acknowledged)
+        .on_event(move |event| {
+            let _ = event_tx.send(event);
+        })
+        .spawn()
+        .await
+        .expect("spawn supervised test child");
+
+        let pid = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(SupervisorEvent::Started { pid }) = event_rx.recv().await {
+                    break pid;
+                }
+            }
+        })
+        .await
+        .expect("test child did not start");
+
+        let matched = supervisor
+            .cancel_if_current(
+                pid,
+                || true,
+                || async {
+                    tokio::time::timeout(Duration::from_secs(5), async {
+                        while !marker.exists() {
+                            tokio::time::sleep(Duration::from_millis(5)).await;
+                        }
+                    })
+                    .await
+                    .expect("test child did not exit during pre-stop work");
+                    Ok::<(), ()>(())
+                },
+            )
+            .await
+            .expect("pre-stop work succeeds");
+        assert!(
+            matched,
+            "the observed child should still own the supervisor"
+        );
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                match event_rx.recv().await {
+                    Some(SupervisorEvent::Stopped) => break,
+                    Some(SupervisorEvent::Started { pid }) => {
+                        panic!("supervisor respawned child {pid} after owner cancellation")
+                    }
+                    Some(_) => {}
+                    None => panic!("supervisor event stream closed before stop"),
+                }
+            }
+        })
+        .await
+        .expect("supervisor did not publish its stopped event");
+
+        supervisor.stop().await.expect("join stopped supervisor");
+    }
 
     #[test]
     fn backoff_doubles_and_caps() {

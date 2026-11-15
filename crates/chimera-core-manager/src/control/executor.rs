@@ -325,6 +325,12 @@ async fn execute(
             .await
             .map(|()| OperationOutput::Stopped)
             .map_err(|error| domain(&error)),
+        CoreCommand::StopIfOwner(expected) => context
+            .manager
+            .stop_if_owner(expected)
+            .await
+            .map(|()| OperationOutput::Stopped)
+            .map_err(|error| domain(&error)),
         CoreCommand::Recover => context
             .manager
             .recover_quarantine()

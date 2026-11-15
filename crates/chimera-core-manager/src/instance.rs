@@ -2,6 +2,7 @@
 
 use std::{
     collections::VecDeque,
+    future::Future,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -53,6 +54,7 @@ struct Shared {
     core_kind: crate::CoreKind,
     persistence_error: parking_lot::Mutex<Option<String>>,
     state_tx: watch::Sender<InstanceStatus>,
+    current_owner: parking_lot::Mutex<Option<(uuid::Uuid, u32)>>,
     user_stop: AtomicBool,
     probe_timeout: AtomicBool,
     parser: parking_lot::Mutex<LogParser>,
@@ -156,6 +158,11 @@ struct ProbeNowRequest {
     response: oneshot::Sender<ProbeResult>,
 }
 
+struct ObservedSupervisorEvent {
+    event: SupervisorEvent,
+    instance_id: Option<uuid::Uuid>,
+}
+
 pub struct InstanceBuilder {
     spec: InstanceSpec,
     epoch: Epoch,
@@ -253,6 +260,7 @@ impl Instance {
             core_kind: spec.core.kind,
             persistence_error: parking_lot::Mutex::new(None),
             state_tx,
+            current_owner: parking_lot::Mutex::new(None),
             user_stop: AtomicBool::new(false),
             probe_timeout: AtomicBool::new(false),
             parser: parking_lot::Mutex::new(LogParser::new(spec.core.kind, epoch.get())),
@@ -296,7 +304,27 @@ impl Instance {
                     *shared.persistence_error.lock() = Some(error.to_string());
                     shared.cancel.cancel();
                 }
-                let _ = event_tx.send(event);
+                let instance_id = match &event {
+                    SupervisorEvent::Started { pid } => {
+                        let instance_id = uuid::Uuid::new_v4();
+                        *shared.current_owner.lock() = Some((instance_id, *pid));
+                        Some(instance_id)
+                    }
+                    SupervisorEvent::Restarting { .. }
+                    | SupervisorEvent::Exited(_)
+                    | SupervisorEvent::GaveUp
+                    | SupervisorEvent::PreparationFailed { .. }
+                    | SupervisorEvent::Stopped => {
+                        *shared.current_owner.lock() = None;
+                        None
+                    }
+                    SupervisorEvent::Ready => None,
+                    _ => {
+                        *shared.current_owner.lock() = None;
+                        None
+                    }
+                };
+                let _ = event_tx.send(ObservedSupervisorEvent { event, instance_id });
             }
         })
         .on_process_event({
@@ -450,6 +478,35 @@ impl Instance {
         result.await.unwrap_or_else(|_| ProbeResult::Unhealthy {
             detail: Some("instance probe driver stopped".into()),
         })
+    }
+
+    /// Atomically confirms the observed child, runs pre-stop work while the
+    /// supervisor cannot respawn it, and then cancels future restarts. The
+    /// caller still uses `stop_and_confirm_dead` to prove process death.
+    pub async fn cancel_supervisor_if_owner(
+        &self,
+        expected_instance_id: uuid::Uuid,
+        expected_pid: u32,
+        before_cancel: impl Future<Output = Result<(), Error>> + Send,
+    ) -> Result<bool, Error> {
+        let supervisor = self.shared.supervisor.lock().await;
+        let Some(supervisor) = supervisor.as_ref() else {
+            return Ok(false);
+        };
+        let current_owner = &self.shared.current_owner;
+        let matched = supervisor
+            .cancel_if_current(
+                expected_pid,
+                || current_owner.lock().as_ref() == Some(&(expected_instance_id, expected_pid)),
+                move || before_cancel,
+            )
+            .await?;
+        if matched {
+            self.shared.user_stop.store(true, Ordering::SeqCst);
+            self.shared.probe_cancel.cancel();
+            self.shared.publish(InstanceState::Stopping);
+        }
+        Ok(matched)
     }
 
     /// Compatibility wrapper for callers that do not provide a manager stop
@@ -678,7 +735,7 @@ struct RunState {
 /// Everything the monitor task is started with, so that adding to the set does
 /// not mean threading one more positional argument through the spawn site.
 struct MonitorLoopArgs {
-    events: mpsc::UnboundedReceiver<SupervisorEvent>,
+    events: mpsc::UnboundedReceiver<ObservedSupervisorEvent>,
     shared: Arc<Shared>,
     epoch: Epoch,
     options: InstanceOptions,
@@ -722,14 +779,17 @@ async fn monitor_loop(args: MonitorLoopArgs) {
                 respawn_deadline = None;
             }
             maybe = events.recv() => match maybe {
-                Some(SupervisorEvent::Started { pid }) => {
+                Some(ObservedSupervisorEvent {
+                    event: SupervisorEvent::Started { pid },
+                    instance_id: Some(instance_id),
+                }) => {
                     stop_probe_driver(&mut driver).await;
                     next_run_id = next_run_id.saturating_add(1);
                     let started_at = std::time::Instant::now();
                     let previous_health = shared.state_tx.borrow().health.clone();
                     let lifecycle = shared.state_tx.borrow().state.clone();
                     shared.publish_status(InstanceStatus {
-                        instance_id: Some(uuid::Uuid::new_v4()),
+                        instance_id: Some(instance_id),
                         state: lifecycle,
                         health: Some(reset_starting_health(previous_health.as_ref())),
                     });
@@ -755,7 +815,10 @@ async fn monitor_loop(args: MonitorLoopArgs) {
                         ));
                     }
                 }
-                Some(SupervisorEvent::Restarting { attempt, .. }) => {
+                Some(ObservedSupervisorEvent {
+                    event: SupervisorEvent::Restarting { attempt, .. },
+                    ..
+                }) => {
                     stop_probe_driver(&mut driver).await;
                     current = None;
                     respawn_deadline = None;
@@ -766,18 +829,27 @@ async fn monitor_loop(args: MonitorLoopArgs) {
                         health: Some(reset_starting_health(previous_health.as_ref())),
                     });
                 }
-                Some(SupervisorEvent::Exited(payload)) => {
+                Some(ObservedSupervisorEvent {
+                    event: SupervisorEvent::Exited(payload),
+                    ..
+                }) => {
                     stop_probe_driver(&mut driver).await;
                     current = None;
                     respawn_deadline = None;
                     last_exit = Some(payload);
                 }
-                Some(SupervisorEvent::PreparationFailed { detail }) => {
+                Some(ObservedSupervisorEvent {
+                    event: SupervisorEvent::PreparationFailed { detail },
+                    ..
+                }) => {
                     stop_probe_driver(&mut driver).await;
                     shared.publish(InstanceState::Stopped(StopReason::Error(detail)));
                     return;
                 }
-                Some(SupervisorEvent::GaveUp) => {
+                Some(ObservedSupervisorEvent {
+                    event: SupervisorEvent::GaveUp,
+                    ..
+                }) => {
                     stop_probe_driver(&mut driver).await;
                     shared.publish_status(InstanceStatus {
                         instance_id: None,
@@ -789,12 +861,19 @@ async fn monitor_loop(args: MonitorLoopArgs) {
                     });
                     return;
                 }
-                Some(SupervisorEvent::Stopped) => {
+                Some(ObservedSupervisorEvent {
+                    event: SupervisorEvent::Stopped,
+                    ..
+                }) => {
                     stop_probe_driver(&mut driver).await;
                     publish_terminal(&shared, last_exit.as_ref());
                     return;
                 }
-                Some(_) => {} // `Ready` (alive-after) only resets the restart budget
+                Some(ObservedSupervisorEvent {
+                    event: SupervisorEvent::Ready,
+                    ..
+                }) => {} // `Ready` (alive-after) only resets the restart budget
+                Some(ObservedSupervisorEvent { .. }) => {}
                 None => {
                     publish_terminal(&shared, last_exit.as_ref());
                     return;
@@ -1101,6 +1180,7 @@ mod tests {
             core_kind: kind::CoreKind::Mihomo,
             persistence_error: parking_lot::Mutex::new(None),
             state_tx,
+            current_owner: parking_lot::Mutex::new(None),
             user_stop: AtomicBool::new(true),
             probe_timeout: AtomicBool::new(false),
             parser: parking_lot::Mutex::new(LogParser::new(kind::CoreKind::Mihomo, 1)),
@@ -1190,6 +1270,7 @@ mod tests {
             core_kind: kind::CoreKind::Mihomo,
             persistence_error: parking_lot::Mutex::new(None),
             state_tx,
+            current_owner: parking_lot::Mutex::new(None),
             user_stop: AtomicBool::new(false),
             probe_timeout: AtomicBool::new(false),
             parser: parking_lot::Mutex::new(LogParser::new(kind::CoreKind::Mihomo, 1)),

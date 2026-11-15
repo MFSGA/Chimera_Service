@@ -1,7 +1,11 @@
 use camino::Utf8PathBuf;
 pub use chimera_core_metadata::CoreErrorKind;
 
-use crate::{Epoch, kind::CoreKind, state::RevisionId};
+use crate::{
+    Epoch,
+    kind::CoreKind,
+    state::{CoreOwner, RevisionId},
+};
 
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -45,6 +49,11 @@ pub enum Error {
     RevisionConflict {
         expected: RevisionId,
         actual: Option<RevisionId>,
+    },
+    #[error("core owner changed: expected {expected:?}, actual {actual:?}")]
+    OwnerConflict {
+        expected: CoreOwner,
+        actual: Option<CoreOwner>,
     },
     #[error("config apply failed: {0}")]
     ApplyFailed(String),
@@ -98,7 +107,9 @@ impl Error {
             Self::StopUnconfirmed(_) => Some(CoreErrorKind::StopUnconfirmed),
             Self::NativeStore(_) => Some(CoreErrorKind::NativeStoreUnavailable),
             Self::ManagerQuarantined { .. } => Some(CoreErrorKind::Quarantined),
-            Self::RevisionConflict { .. } => Some(CoreErrorKind::RevisionConflict),
+            Self::RevisionConflict { .. } | Self::OwnerConflict { .. } => {
+                Some(CoreErrorKind::RevisionConflict)
+            }
             Self::ApplyFailed(_) => Some(CoreErrorKind::ApplyFailed),
             Self::ApplyRollbackFailed { .. } => Some(CoreErrorKind::ApplyRollbackFailed),
             // The durability wrapper is a warning around a real failure; report

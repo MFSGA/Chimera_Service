@@ -8,7 +8,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use chimera_core_manager::{
     ApplyOutcome, ConfigInput, ConfigRevision, ControlOptions, CoreCommand, CoreCommandEnvelope,
     CoreControl, CoreError as ControlError, CoreErrorKind, CoreKind, CoreManager as Manager,
-    CoreSpec, CoreState as ManagerCoreState, CoreStatus, Epoch, Error as ManagerError,
+    CoreOwner, CoreSpec, CoreState as ManagerCoreState, CoreStatus, Epoch, Error as ManagerError,
     ExecutorExit, HealthState, HealthStatus, Host, InstanceOptions, InstanceSpec, LocalIpcPolicy,
     LogFrame, LogLevel, ManagerOptions, OperationHandle, OperationId, OperationOutput,
     OperationState, ReconcileRequest, RevisionId,
@@ -54,6 +54,21 @@ const CORE_SHUTDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_sec
 
 const DNS_SAFE_SHUTDOWN_RETRY_INITIAL: std::time::Duration = std::time::Duration::from_secs(1);
 const DNS_SAFE_SHUTDOWN_RETRY_MAX: std::time::Duration = std::time::Duration::from_secs(30);
+
+fn normalized_directory(path: &Path) -> PathBuf {
+    dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn service_owner_matches(
+    infos: &RuntimeInfos,
+    expected_config_dir: &str,
+    expected_data_dir: &str,
+) -> bool {
+    normalized_directory(Path::new(expected_config_dir))
+        == normalized_directory(&infos.nyanpasu_config_dir)
+        && normalized_directory(Path::new(expected_data_dir))
+            == normalized_directory(&infos.nyanpasu_data_dir)
+}
 
 async fn retry_until_success<F, Fut, E>(mut operation: F)
 where
@@ -559,7 +574,32 @@ impl CoreManagerService {
                 }))
             }
             CoreCommandInfo::Stop => CoreCommand::Stop,
-            CoreCommandInfo::Recover => CoreCommand::Recover,
+            CoreCommandInfo::StopIfOwner { expected_owner } => {
+                let revision = map_revision_id(&expected_owner.revision)?;
+                let owner = CoreOwner::from_parts(&expected_owner.instance_id, revision)
+                    .map_err(OpError::plain)?;
+                CoreCommand::StopIfOwner(owner)
+            }
+            CoreCommandInfo::Recover => {
+                return Err(OpError::with_kind(
+                    CoreErrorKind::OperationConflict,
+                    "unfenced Service recovery is not accepted; the caller must prove its installation identity",
+                )
+                .retryable(false));
+            }
+            CoreCommandInfo::RecoverIfServiceOwner {
+                expected_config_dir,
+                expected_data_dir,
+            } => {
+                if !service_owner_matches(infos, expected_config_dir, expected_data_dir) {
+                    return Err(OpError::with_kind(
+                        CoreErrorKind::OperationConflict,
+                        "the Service runtime belongs to another application installation; quarantine recovery was refused",
+                    )
+                    .retryable(false));
+                }
+                CoreCommand::Recover
+            }
         };
         let handle = self
             .inner
@@ -1723,6 +1763,112 @@ mod tests {
             nyanpasu_data_dir: root.join("nyanpasu-data"),
             nyanpasu_app_dir: root.join("nyanpasu-app"),
         }
+    }
+
+    #[tokio::test]
+    async fn matching_service_owner_recovery_is_admitted_to_manager() {
+        let (root, service) = test_service().await;
+        let infos = test_infos(root.path());
+        let operation_id: OperationId = "3011223344556677-8899aabb-ccddeeff".parse().unwrap();
+        let request = CoreSubmitReq {
+            operation_id: Cow::Borrowed("3011223344556677-8899aabb-ccddeeff"),
+            command: CoreCommandInfo::RecoverIfServiceOwner {
+                expected_config_dir: Cow::Owned(
+                    infos.nyanpasu_config_dir.to_string_lossy().into_owned(),
+                ),
+                expected_data_dir: Cow::Owned(
+                    infos.nyanpasu_data_dir.to_string_lossy().into_owned(),
+                ),
+            },
+        };
+
+        let accepted = match service.submit_v2(&infos, &request) {
+            Ok(accepted) => accepted,
+            Err(error) => panic!(
+                "the matching installation may recover its manager: {}",
+                error.message
+            ),
+        };
+
+        assert_eq!(accepted.id, operation_id.to_string());
+        assert!(
+            service.inner.control.operation(operation_id).is_some(),
+            "matching owner evidence should reach manager admission"
+        );
+    }
+
+    #[tokio::test]
+    async fn foreign_service_owner_recovery_is_rejected_before_manager_admission() {
+        let (root, service) = test_service().await;
+        let infos = test_infos(root.path());
+        let operation_id: OperationId = "0011223344556677-8899aabb-ccddeeff".parse().unwrap();
+        let request = CoreSubmitReq {
+            operation_id: Cow::Borrowed("0011223344556677-8899aabb-ccddeeff"),
+            command: CoreCommandInfo::RecoverIfServiceOwner {
+                expected_config_dir: Cow::Owned(
+                    root.path()
+                        .join("foreign-config")
+                        .to_string_lossy()
+                        .into_owned(),
+                ),
+                expected_data_dir: Cow::Owned(
+                    infos.nyanpasu_data_dir.to_string_lossy().into_owned(),
+                ),
+            },
+        };
+
+        let error = service
+            .submit_v2(&infos, &request)
+            .expect_err("a foreign installation must not recover this manager");
+
+        assert_eq!(error.kind, Some(CoreErrorKind::OperationConflict));
+        assert!(service.inner.control.operation(operation_id).is_none());
+    }
+
+    #[tokio::test]
+    async fn foreign_service_data_directory_recovery_is_rejected_before_manager_admission() {
+        let (root, service) = test_service().await;
+        let infos = test_infos(root.path());
+        let operation_id: OperationId = "1011223344556677-8899aabb-ccddeeff".parse().unwrap();
+        let request = CoreSubmitReq {
+            operation_id: Cow::Borrowed("1011223344556677-8899aabb-ccddeeff"),
+            command: CoreCommandInfo::RecoverIfServiceOwner {
+                expected_config_dir: Cow::Owned(
+                    infos.nyanpasu_config_dir.to_string_lossy().into_owned(),
+                ),
+                expected_data_dir: Cow::Owned(
+                    root.path()
+                        .join("foreign-data")
+                        .to_string_lossy()
+                        .into_owned(),
+                ),
+            },
+        };
+
+        let error = service
+            .submit_v2(&infos, &request)
+            .expect_err("a foreign data directory must not recover this manager");
+
+        assert_eq!(error.kind, Some(CoreErrorKind::OperationConflict));
+        assert!(service.inner.control.operation(operation_id).is_none());
+    }
+
+    #[tokio::test]
+    async fn unfenced_service_recovery_is_rejected_before_manager_admission() {
+        let (root, service) = test_service().await;
+        let infos = test_infos(root.path());
+        let operation_id: OperationId = "2011223344556677-8899aabb-ccddeeff".parse().unwrap();
+        let request = CoreSubmitReq {
+            operation_id: Cow::Borrowed("2011223344556677-8899aabb-ccddeeff"),
+            command: CoreCommandInfo::Recover,
+        };
+
+        let error = service
+            .submit_v2(&infos, &request)
+            .expect_err("recovery without an installation identity must fail closed");
+
+        assert_eq!(error.kind, Some(CoreErrorKind::OperationConflict));
+        assert!(service.inner.control.operation(operation_id).is_none());
     }
 
     #[test]

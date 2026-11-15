@@ -54,6 +54,16 @@ pub trait RuntimeInstance: Send + Sync {
     /// One immediate health probe outside the periodic schedule.
     fn probe_now<'a>(&'a self, phase: ProbePhase) -> BoxFuture<'a, ProbeResult>;
 
+    /// Compare the observed process owner at the supervisor boundary, run the
+    /// pre-stop operation while respawn is blocked, and cancel future restarts.
+    /// `false` means the process changed or stopped before the fence closed.
+    fn cancel_if_owner<'a>(
+        &'a self,
+        instance_id: uuid::Uuid,
+        pid: u32,
+        before_cancel: BoxFuture<'a, Result<(), Error>>,
+    ) -> BoxFuture<'a, Result<bool, Error>>;
+
     /// Stop and *prove* death within `timeout`. `Err(StopUnconfirmed)` is the
     /// only honest answer when proof is unavailable, and the caller must
     /// quarantine — a timeout is never "probably stopped" (design §7.4).

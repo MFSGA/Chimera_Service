@@ -120,7 +120,27 @@ pub enum CoreCommandInfo<'n> {
         expected_applied: Option<RevisionIdInfo>,
     },
     Stop,
+    /// Stop only if the running Service core still matches this process and
+    /// revision. Older daemons reject this additive variant, so an outdated
+    /// Service fails closed instead of receiving an unconditional stop.
+    StopIfOwner {
+        expected_owner: CoreOwnerInfo,
+    },
     Recover,
+    /// Recover a quarantined core only while this service still belongs to
+    /// the caller's application installation. The service validates both
+    /// directories before admitting the recovery command.
+    RecoverIfServiceOwner {
+        expected_config_dir: Cow<'n, str>,
+        expected_data_dir: Cow<'n, str>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+pub struct CoreOwnerInfo {
+    pub instance_id: String,
+    pub revision: RevisionIdInfo,
 }
 
 /// Query one operation, optionally long-polling for its terminal state.
@@ -224,6 +244,7 @@ pub type CoreApiConnectionRes<'a> = R<'a, Option<CoreApiConnection>>;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::borrow::Cow;
 
     #[test]
     fn chimera_client_channels_keep_distinct_wire_and_executable_identities() {
@@ -291,6 +312,55 @@ mod tests {
             wait_ms: None,
         };
         assert!(!serde_json::to_string(&query).unwrap().contains("wait_ms"));
+    }
+
+    #[test]
+    fn stop_if_owner_roundtrips_the_full_owner_identity() {
+        let request = CoreSubmitReq {
+            operation_id: Cow::Borrowed("0011223344556677-8899aabb-ccddeeff"),
+            command: CoreCommandInfo::StopIfOwner {
+                expected_owner: CoreOwnerInfo {
+                    instance_id: "9af54a67-fc31-4dcb-8422-26644c6277c8".into(),
+                    revision: RevisionIdInfo {
+                        epoch: 4,
+                        generation: 12,
+                        effective_hash: "0123456789abcdef".into(),
+                    },
+                },
+            },
+        };
+        let encoded = serde_json::to_string(&request).unwrap();
+        assert!(encoded.contains("\"type\":\"stop_if_owner\""));
+        let decoded: CoreSubmitReq<'_> = serde_json::from_str(&encoded).unwrap();
+        assert!(matches!(
+            decoded.command,
+            CoreCommandInfo::StopIfOwner { .. }
+        ));
+    }
+
+    #[test]
+    fn service_owner_recovery_keeps_both_installation_directories_on_the_wire() {
+        let request = CoreSubmitReq {
+            operation_id: Cow::Borrowed("0011223344556677-8899aabb-ccddeeff"),
+            command: CoreCommandInfo::RecoverIfServiceOwner {
+                expected_config_dir: Cow::Borrowed("/opt/chimera/config"),
+                expected_data_dir: Cow::Borrowed("/opt/chimera/data"),
+            },
+        };
+
+        let encoded = serde_json::to_string(&request).unwrap();
+        assert!(encoded.contains("\"type\":\"recover_if_service_owner\""));
+        let decoded: CoreSubmitReq<'_> = serde_json::from_str(&encoded).unwrap();
+        let CoreCommandInfo::RecoverIfServiceOwner {
+            expected_config_dir,
+            expected_data_dir,
+        } = decoded.command
+        else {
+            panic!("the owner-fenced recovery command changed shape");
+        };
+
+        assert_eq!(expected_config_dir, "/opt/chimera/config");
+        assert_eq!(expected_data_dir, "/opt/chimera/data");
     }
 
     #[test]

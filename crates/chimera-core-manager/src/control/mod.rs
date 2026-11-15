@@ -28,7 +28,7 @@ use crate::{
     log::LogFrame,
     manager::{ApplyOutcome, CoreManager},
     spec::{CoreSpec, InstanceOptions, InstanceSpec},
-    state::{CoreStatus, RevisionId},
+    state::{CoreOwner, CoreStatus, RevisionId},
 };
 
 use executor::{Admission, ExecutorContext, ExecutorWork, Registry};
@@ -169,6 +169,10 @@ pub struct CheckRequest {
 pub enum CoreCommand {
     Reconcile(Box<ReconcileRequest>),
     Stop,
+    /// Stop only when the currently managed process still matches the
+    /// observed instance and revision. The manager performs the comparison
+    /// while holding the same lock that serializes start, reconcile, and stop.
+    StopIfOwner(CoreOwner),
     Recover,
     Shutdown,
 }
@@ -214,6 +218,16 @@ impl CoreCommand {
                 payload_digest(&payload)
             }
             Self::Stop => payload_digest(b"stop"),
+            Self::StopIfOwner(expected) => payload_digest(
+                format!(
+                    "stop_if_owner\0{}\0{}\0{}\0{}",
+                    expected.instance_id,
+                    expected.revision.epoch,
+                    expected.revision.generation,
+                    expected.revision.effective_hash,
+                )
+                .as_bytes(),
+            ),
             Self::Recover => payload_digest(b"recover"),
             Self::Shutdown => payload_digest(b"shutdown"),
         }
@@ -708,6 +722,39 @@ mod tests {
         // Pinned so a silent algorithm change cannot slip past the idempotency
         // registry's stored digests.
         assert_eq!(payload_digest(b""), "cbf29ce484222325");
+    }
+
+    #[test]
+    fn owner_fenced_stop_digest_includes_both_owner_fields() {
+        let revision = RevisionId {
+            epoch: crate::Epoch::new(2).unwrap(),
+            generation: 5,
+            effective_hash: "effective".into(),
+        };
+        let first = CoreCommand::StopIfOwner(CoreOwner {
+            instance_id: uuid::Uuid::from_u128(1),
+            revision: revision.clone(),
+        });
+        let replacement_instance = CoreCommand::StopIfOwner(CoreOwner {
+            instance_id: uuid::Uuid::from_u128(2),
+            revision: revision.clone(),
+        });
+        let replacement_revision = CoreCommand::StopIfOwner(CoreOwner {
+            instance_id: uuid::Uuid::from_u128(1),
+            revision: RevisionId {
+                generation: 6,
+                ..revision
+            },
+        });
+
+        assert_ne!(
+            first.payload_digest(),
+            replacement_instance.payload_digest()
+        );
+        assert_ne!(
+            first.payload_digest(),
+            replacement_revision.payload_digest()
+        );
     }
 
     #[test]

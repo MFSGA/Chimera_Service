@@ -159,6 +159,28 @@ pub struct RevisionId {
     pub effective_hash: String,
 }
 
+/// Identity fence for a core process and the config revision it currently
+/// runs. Mutations that act on an observed owner use both fields so a stale
+/// observation cannot affect a replacement instance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CoreOwner {
+    pub instance_id: uuid::Uuid,
+    pub revision: RevisionId,
+}
+
+impl CoreOwner {
+    /// Parse the UUID boundary used by IPC and combine it with a validated
+    /// revision. Consumers need not depend directly on the UUID crate.
+    pub fn from_parts(instance_id: &str, revision: RevisionId) -> Result<Self, String> {
+        let instance_id = uuid::Uuid::parse_str(instance_id)
+            .map_err(|error| format!("malformed core instance id: {error}"))?;
+        Ok(Self {
+            instance_id,
+            revision,
+        })
+    }
+}
+
 impl ConfigRevision {
     pub fn id(&self) -> RevisionId {
         RevisionId {

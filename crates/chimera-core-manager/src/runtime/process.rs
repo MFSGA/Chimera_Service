@@ -202,6 +202,20 @@ impl RuntimeInstance for Instance {
         Box::pin(Instance::probe_now(self, phase))
     }
 
+    fn cancel_if_owner<'a>(
+        &'a self,
+        instance_id: uuid::Uuid,
+        pid: u32,
+        before_cancel: BoxFuture<'a, Result<(), Error>>,
+    ) -> BoxFuture<'a, Result<bool, Error>> {
+        Box::pin(Instance::cancel_supervisor_if_owner(
+            self,
+            instance_id,
+            pid,
+            before_cancel,
+        ))
+    }
+
     fn stop_and_confirm_dead(
         self: Box<Self>,
         timeout: Duration,
