@@ -99,15 +99,66 @@ pub trait DnsController: Send + Sync {
     fn restore<'a>(&'a self, record: &'a DnsOverrideRecord) -> BoxFuture<'a, Result<(), DnsError>>;
 }
 
-/// macOS implementation following the reference: when the core DNS service
-/// listens on port 53, point the host resolver at its loopback listener.
+#[cfg(any(target_os = "macos", test))]
+fn first_resolver_uses_loopback(output: &str) -> bool {
+    let mut in_first_resolver = false;
+
+    for line in output.lines() {
+        let line = line.trim();
+        if line.starts_with("resolver #") {
+            if in_first_resolver {
+                break;
+            }
+            in_first_resolver = true;
+            continue;
+        }
+
+        if in_first_resolver && line.starts_with("nameserver[") {
+            return line
+                .split_once(':')
+                .is_some_and(|(_, address)| address.trim() == "127.0.0.1");
+        }
+    }
+
+    false
+}
+
+#[cfg(test)]
+mod resolver_output_tests {
+    use super::first_resolver_uses_loopback;
+
+    #[test]
+    fn accepts_loopback_as_the_first_resolver() {
+        let output =
+            "resolver #1\n  nameserver[0] : 127.0.0.1\nresolver #2\n  nameserver[0] : 192.0.2.53\n";
+        assert!(first_resolver_uses_loopback(output));
+    }
+
+    #[test]
+    fn rejects_loopback_only_in_a_later_resolver() {
+        let output =
+            "resolver #1\n  nameserver[0] : 192.0.2.53\nresolver #2\n  nameserver[0] : 127.0.0.1\n";
+        assert!(!first_resolver_uses_loopback(output));
+    }
+
+    #[test]
+    fn rejects_missing_or_serverless_first_resolver() {
+        assert!(!first_resolver_uses_loopback("DNS configuration\n"));
+        assert!(!first_resolver_uses_loopback(
+            "resolver #1\n  search domain[0] : example.test\nresolver #2\n  nameserver[0] : 127.0.0.1\n"
+        ));
+    }
+}
+
+/// Local macOS DNS integration: when the core DNS service listens on port 53,
+/// point the host resolver at its loopback listener and verify resolver adoption.
 ///
-/// Mechanism choice (audit §3, design §8): a `scutil` dynamic-store `State:`
-/// key expresses *structural ownership* — creating
-/// `State:/Network/Service/<id>/DNS` overrides resolution, deleting the key
-/// restores it, and the key cannot survive a reboot. That beats
-/// `networksetup -setdnsservers`, whose only restore is writing back a
-/// remembered value that may have changed underneath.
+/// A `scutil` dynamic-store `State:` key gives the controller a dedicated
+/// artifact to remove, but writing and reading the key does not prove that
+/// macOS adopted it as a resolver. `apply` therefore checks `scutil --dns` and
+/// rejects the activation unless the first resolver is the loopback listener.
+/// This local mechanism remains subject to real-host validation; the pinned
+/// reference does not provide an equivalent host DNS override.
 ///
 /// Phase-0 acceptance criteria (machine-checkable, run on macOS):
 /// 1. after writing the key, `scutil --dns` lists the override as the first
@@ -118,6 +169,9 @@ pub trait DnsController: Send + Sync {
 pub mod macos {
     use super::*;
     use serde_yaml_ng::Value;
+
+    const DNS_RESOLVER_SETTLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+    const DNS_RESOLVER_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 
     pub struct MacosDnsController {
         /// The dynamic-store key this controller owns, e.g.
@@ -219,6 +273,62 @@ pub mod macos {
                 .collect();
             Ok(Some(servers))
         }
+
+        async fn system_resolver_uses_loopback(&self) -> Result<bool, DnsError> {
+            let output = tokio::process::Command::new("/usr/sbin/scutil")
+                .arg("--dns")
+                .kill_on_drop(true)
+                .output()
+                .await?;
+            if !output.status.success() {
+                return Err(DnsError::Command(format!(
+                    "scutil --dns failed: {}",
+                    String::from_utf8_lossy(&output.stderr).trim()
+                )));
+            }
+            Ok(super::first_resolver_uses_loopback(
+                &String::from_utf8_lossy(&output.stdout),
+            ))
+        }
+
+        async fn wait_for_system_resolver(&self) -> Result<bool, DnsError> {
+            let deadline = tokio::time::Instant::now() + DNS_RESOLVER_SETTLE_TIMEOUT;
+            loop {
+                if tokio::time::Instant::now() >= deadline {
+                    return Ok(false);
+                }
+                match tokio::time::timeout_at(deadline, self.system_resolver_uses_loopback()).await
+                {
+                    Ok(Ok(true)) => return Ok(true),
+                    Ok(Ok(false)) => {}
+                    Ok(Err(error)) => return Err(error),
+                    Err(_) => {
+                        return Err(DnsError::Command(
+                            "scutil --dns timed out while checking the system resolver".into(),
+                        ));
+                    }
+                }
+                let next_poll = std::cmp::min(
+                    deadline,
+                    tokio::time::Instant::now() + DNS_RESOLVER_POLL_INTERVAL,
+                );
+                tokio::time::sleep_until(next_poll).await;
+            }
+        }
+
+        async fn remove_override(&self) -> Result<(), DnsError> {
+            if self.read_back().await?.is_none() {
+                return Ok(());
+            }
+            self.scutil(format!("remove {}\n", self.store_key), true)
+                .await?;
+            if self.read_back().await?.is_some() {
+                return Err(DnsError::Command(
+                    "read-back still shows the override after removal".into(),
+                ));
+            }
+            Ok(())
+        }
     }
 
     impl DnsController for MacosDnsController {
@@ -250,6 +360,24 @@ pub mod macos {
                         "read-back mismatch after apply: {observed:?}"
                     )));
                 }
+                let resolver_check = self.wait_for_system_resolver().await;
+                let resolver_status = match &resolver_check {
+                    Ok(true) => None,
+                    Ok(false) => {
+                        Some("the system resolver did not select 127.0.0.1 first".to_owned())
+                    }
+                    Err(error) => Some(format!("could not verify the system resolver: {error}")),
+                };
+                if let Some(resolver_status) = resolver_status {
+                    let cleanup = self.remove_override().await;
+                    let cleanup_status = match cleanup {
+                        Ok(()) => "the unverified override was removed".to_owned(),
+                        Err(error) => format!("failed to remove the unverified override: {error}"),
+                    };
+                    return Err(DnsError::Command(format!(
+                        "scutil accepted the DNS key, but {resolver_status}; {cleanup_status}"
+                    )));
+                }
                 Ok(DnsOverrideRecord {
                     interface: self.store_key.clone(),
                     previous,
@@ -265,21 +393,7 @@ pub mod macos {
             &'a self,
             _record: &'a DnsOverrideRecord,
         ) -> BoxFuture<'a, Result<(), DnsError>> {
-            Box::pin(async move {
-                // Structural restore: delete the owned key. No remembered
-                // value can be stale because nothing is written back.
-                if self.read_back().await?.is_none() {
-                    return Ok(());
-                }
-                self.scutil(format!("remove {}\n", self.store_key), true)
-                    .await?;
-                if self.read_back().await?.is_some() {
-                    return Err(DnsError::Command(
-                        "read-back still shows the override after restore".into(),
-                    ));
-                }
-                Ok(())
-            })
+            Box::pin(self.remove_override())
         }
     }
 
