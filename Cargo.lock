@@ -659,6 +659,7 @@ dependencies = [
  "processkit",
  "reqwest",
  "reqwest-websocket",
+ "serde",
  "shared_child",
  "sysinfo 0.39.6",
  "tempfile",
