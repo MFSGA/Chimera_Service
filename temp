@@ -1,35 +1,23 @@
 
-## [1.11.2] - 2026-11-08 17:36:48
+## [1.12.0] - 2026-11-19 11:47:59
 
 
 ### ✨ Features
 
-- **clash-api:** Support usefull api crate in runtime for tauri by @MFSGA 
-
-- **reqwest:** Add the vendor for serde by @MFSGA 
-
-- **serde:** Add the two crates for clash-api by @MFSGA 
+- **network:** Add Linux transparent proxy capture by @MFSGA  in [#117](https://github.com/MFSGA/Chimera_Service/pull/117)
 
 
 ### 🐛 Bug Fixes
 
-- **clash:** Replace the crate name by @MFSGA 
+- **dns:** Verify macOS resolver activation by @MFSGA 
 
-
-### 🔨 Refactor
-
-- **service:** Align upstream graceful shutdown and redact environment logs by @MFSGA 
-
-
-### 🧹 Miscellaneous Tasks
-
-- Apply linting fixes with rustfmt by @MFSGA 
+- **service:** Fence runtime recovery and stop by owner by @MFSGA 
 
 -----------------
 
 
 
-**Full Changelog**: https://github.com/MFSGA/Chimera_Service/compare/v1.11.1...v1.11.2
+**Full Changelog**: https://github.com/MFSGA/Chimera_Service/compare/v1.11.2...v1.12.0
 
 
 
