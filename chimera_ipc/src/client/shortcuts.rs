@@ -254,6 +254,63 @@ impl<'a> Client<'a> {
         Ok(response.ok()?.data.flatten())
     }
 
+    pub async fn log_files(
+        &self,
+    ) -> Result<'_, chimera_logging::LogResult<Vec<chimera_logging::LogFileInfo>>> {
+        let request = Request::get(api::log::LOG_FILES_ENDPOINT).body(Empty::<Bytes>::new())?;
+        let response = send_request(&self.0, request)
+            .await?
+            .cast_body::<api::R<'_, chimera_logging::LogResult<Vec<chimera_logging::LogFileInfo>>>>(
+            )
+            .await?
+            .ok()?;
+        Ok(response
+            .data
+            .ok_or_else(|| std::io::Error::other("missing log catalog"))?)
+    }
+
+    async fn log_request<T, R>(
+        &self,
+        operation: &'static str,
+        payload: &api::log::OwnedLogRequest<T>,
+    ) -> Result<'_, chimera_logging::LogResult<R>>
+    where
+        T: serde::Serialize,
+        R: serde::Serialize + serde::de::DeserializeOwned + std::fmt::Debug,
+    {
+        let request = Request::post(operation)
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from(simd_json::serde::to_string(payload)?))?;
+        let response = send_request(&self.0, request)
+            .await?
+            .cast_body::<api::R<'_, chimera_logging::LogResult<R>>>()
+            .await?
+            .ok()?;
+        Ok(response
+            .data
+            .ok_or_else(|| std::io::Error::other("missing log response"))?)
+    }
+    pub async fn open_logs(
+        &self,
+        payload: &api::log::OwnedLogRequest<chimera_logging::OpenLogs>,
+    ) -> Result<'_, chimera_logging::LogResult<chimera_logging::LogSession>> {
+        self.log_request(api::log::LOG_OPEN_ENDPOINT, payload).await
+    }
+    pub async fn query_logs(
+        &self,
+        payload: &api::log::OwnedLogRequest<chimera_logging::QueryLogs>,
+    ) -> Result<'_, chimera_logging::LogResult<chimera_logging::LogPage>> {
+        self.log_request(api::log::LOG_QUERY_ENDPOINT, payload)
+            .await
+    }
+    pub async fn close_logs(
+        &self,
+        payload: &api::log::OwnedLogRequest<String>,
+    ) -> Result<'_, chimera_logging::LogResult<()>> {
+        self.log_request(api::log::LOG_CLOSE_ENDPOINT, payload)
+            .await
+    }
+
     pub async fn inspect_logs(&self) -> Result<'_, api::log::LogsResBody<'_>> {
         let request = Request::get(api::log::LOGS_INSPECT_ENDPOINT).body(Empty::<Bytes>::new())?;
         let response = send_request(&self.0, request)

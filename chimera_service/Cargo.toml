@@ -19,6 +19,7 @@ deadlock_detection = [
 dev = []
 
 [dependencies]
+chimera-logging = { path = "../crates/chimera-logging" }
 tokio = { workspace = true, features = ["full"] }
 ctrlc = { version = "3", features = ["termination"] }
 

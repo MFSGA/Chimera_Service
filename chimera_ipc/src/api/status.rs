@@ -114,6 +114,8 @@ pub struct RuntimeInfos<'a> {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct StatusResBody<'a> {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_query_version: Option<u32>,
     pub version: Cow<'a, str>,
     pub core_infos: CoreInfos,
     pub runtime_infos: RuntimeInfos<'a>,

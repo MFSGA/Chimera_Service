@@ -19,6 +19,7 @@ pub async fn status(State(state): State<AppState>) -> (StatusCode, Json<StatusRe
     let runtime_infos = &state.runtime;
     let res = RBuilder::success(StatusResBody {
         version: Cow::Borrowed(crate::consts::APP_VERSION),
+        log_query_version: Some(chimera_ipc::api::log::LOG_QUERY_VERSION),
         core_infos: status,
         runtime_infos: RuntimeInfos {
             service_data_dir: Cow::Owned(runtime_infos.service_data_dir.clone()),

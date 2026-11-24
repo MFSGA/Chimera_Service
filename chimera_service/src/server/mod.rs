@@ -108,7 +108,16 @@ pub async fn run(
         }));
     }));
 
+    let logs = chimera_logging::LogsClient::start(
+        Arc::new(chimera_logging::FsLogFiles::new(
+            crate::utils::dirs::service_logs_dir(),
+            "nyanpasu-service".into(),
+        )),
+        Arc::new(chimera_logging::MonotonicClock::default()),
+    )
+    .await?;
     let state = AppState {
+        logs: logs.clone(),
         core_manager: core_manager.clone(),
         hub,
         runtime: Arc::new(runtime),
@@ -139,6 +148,7 @@ pub async fn run(
         // rather than answering with a control plane that is not there.
         exit = core_manager.until_control_closed() => ServerExit::Control(exit),
     };
+    let _ = logs.shutdown().await;
     proxy_shutdown.begin_shutdown();
     lifecycle_shutdown.cancel();
     if let Err(error) = lifecycle_task.await {

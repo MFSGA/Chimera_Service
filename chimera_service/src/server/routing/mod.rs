@@ -20,6 +20,7 @@ pub struct AppState {
     pub hub: EventHub,
     pub runtime: Arc<RuntimeInfos>,
     pub transparent_proxy: TransparentProxy,
+    pub logs: chimera_logging::LogsClient,
 }
 
 #[instrument(skip(state))]
@@ -30,6 +31,7 @@ pub fn create_router(state: AppState) -> Router {
         .merge(status::setup())
         .merge(core::setup())
         .merge(logs::setup())
+        .merge(logs::sessions())
         .merge(network::setup())
         .merge(transparent_proxy::setup())
         .merge(ws::setup())

@@ -6,9 +6,10 @@ edition = "2024"
 [features]
 server = ["dep:axum", "dep:axum-extra", "dep:tower", "dep:widestring"]
 client = ["dep:axum", "dep:backon", "dep:tokio-tungstenite"]
-specta = ["dep:specta", "chimera_utils/specta"]
+specta = ["dep:specta", "chimera_utils/specta", "chimera-logging/specta"]
 
 [dependencies]
+chimera-logging = { path = "../crates/chimera-logging" }
 chimera-core-metadata = { package = "chimera-service-core-metadata", path = "../crates/chimera-core-metadata" }
 chimera_utils = { workspace = true, default-features = false, features = [
     "core_manager",
